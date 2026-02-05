@@ -8,44 +8,37 @@ app.use(bodyParser.json());
 
 let violations = [];
 
-// ESP Data Receive API
-app.post("/api/vehicle-data", (req, res) => {
-    const data = req.body;
-
-    console.log("Received Data:", data);
-
-    // Store violation
-    if(data.violation){
-        violations.push({
-            time: new Date(),
-            type: data.violation,
-            vehicle: data.vehicle
-        });
-    }
-
-    res.json({status:"Data received"});
+// Health check
+app.get("/", (req, res) => {
+  res.send("Vehicle Blackbox Backend Running");
 });
 
-// Get Violation List
-app.get("/api/violations", (req,res)=>{
-    res.json(violations);
+// Receive violation data
+app.post("/violation", (req, res) => {
+
+  const data = {
+    vehicleId: req.body.vehicleId,
+    type: req.body.type,
+    location: req.body.location,
+    time: new Date()
+  };
+
+  violations.push(data);
+
+  res.json({
+    message: "Violation Logged",
+    totalViolations: violations.length
+  });
+
 });
 
-// Auto Challan Check
-app.get("/api/challan",(req,res)=>{
-    if(violations.length >= 3){
-        res.json({
-            challan:"Generated",
-            count:violations.length
-        });
-    } else {
-        res.json({
-            challan:"Not Generated",
-            count:violations.length
-        });
-    }
+// View all violations
+app.get("/violations", (req, res) => {
+  res.json(violations);
 });
 
-app.listen(3000, ()=>{
-    console.log("Server running on port 3000");
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log("Server running on port", PORT);
 });
