@@ -6,107 +6,106 @@ const PDFDocument = require("pdfkit");
 const app = express();
 const PORT = 3000;
 
-// Allow large image data
 app.use(express.json({ limit: "20mb" }));
 
-// Create folders if not exist
 if (!fs.existsSync("photos")) fs.mkdirSync("photos");
 if (!fs.existsSync("challans")) fs.mkdirSync("challans");
-if (!fs.existsSync("logs.json")) fs.writeFileSync("logs.json", "[]");
 
-// ================= PDF GENERATOR =================
-function generateChallan(data) {
+let violationCount = 0;
 
-  const fileName = `challan_${Date.now()}.pdf`;
+// ================= CHALLAN GENERATOR =================
+function generateChallan(data, imagePath) {
+
+  const fileName = `RTO_CHALLAN_${Date.now()}.pdf`;
   const filePath = path.join("challans", fileName);
 
   const doc = new PDFDocument();
   doc.pipe(fs.createWriteStream(filePath));
 
-  doc.fontSize(20).text("TRAFFIC VIOLATION CHALLAN", { align: "center" });
+  doc.fontSize(18).text("GOVERNMENT OF INDIA", { align: "center" });
+  doc.fontSize(16).text("REGIONAL TRANSPORT OFFICE (RTO)", { align: "center" });
+  doc.moveDown();
+  doc.fontSize(14).text("TRAFFIC VIOLATION CHALLAN", { align: "center" });
+  doc.moveDown(2);
+
+  doc.fontSize(12);
+  doc.text(`Challan No: ${Date.now()}`);
+  doc.text(`Date & Time: ${data.time}`);
   doc.moveDown();
 
-  doc.fontSize(14).text(`Date: ${new Date().toLocaleString()}`);
-  doc.text(`Camera: ${data.camera}`);
-  doc.text(`Violation: ${data.violation}`);
-  doc.text(`Vehicle: ${data.vehicle}`);
-  doc.text(`Owner: ${data.owner}`);
-
+  doc.text(`Vehicle Number: ${data.vehicle}`);
+  doc.text(`Owner Name: ${data.owner}`);
   doc.moveDown();
-  doc.text("Fine Amount: ₹1000");
+
+  doc.text("Violation Details:");
+  doc.text(data.violationSentence);
+  doc.moveDown();
+
+  doc.text("Evidence Image:");
+  doc.image(imagePath, { fit: [250, 200], align: "center" });
+  doc.moveDown();
+
+  doc.text("Fine Amount: ₹ 2000", { underline: true });
 
   doc.end();
 
   return fileName;
 }
 
-// ================= UPLOAD ROUTE =================
+// ================= ROUTE =================
 app.post("/upload", (req, res) => {
 
-  try {
+  const { violation, vehicle, owner, image } = req.body;
 
-    const { camera, violation, vehicle, owner, photo } = req.body;
-
-    if (!camera || !violation || !vehicle || !owner) {
-      return res.status(400).send("Missing Data");
-    }
-
-    const logs = JSON.parse(fs.readFileSync("logs.json"));
-
-    let photoFile = null;
-
-    if (photo) {
-      const photoName = `photo_${Date.now()}.jpg`;
-      const photoPath = path.join("photos", photoName);
-
-      const buffer = Buffer.from(photo, "base64");
-      fs.writeFileSync(photoPath, buffer);
-
-      photoFile = photoName;
-    }
-
-    const challanFile = generateChallan({
-      camera,
-      violation,
-      vehicle,
-      owner
-    });
-
-    const entry = {
-      time: new Date().toISOString(),
-      camera,
-      violation,
-      vehicle,
-      owner,
-      photo: photoFile,
-      challan: challanFile
-    };
-
-    logs.push(entry);
-    fs.writeFileSync("logs.json", JSON.stringify(logs, null, 2));
-
-    console.log("=====================================");
-    console.log("NEW VIOLATION DETECTED");
-    console.log("Camera:", camera);
-    console.log("Violation:", violation);
-    console.log("Vehicle:", vehicle);
-    console.log("Owner:", owner);
-    console.log("Photo Saved:", photoFile);
-    console.log("Challan Generated:", challanFile);
-    console.log("=====================================");
-
-    res.status(200).send("Logged Successfully");
-
-  } catch (err) {
-    console.log(err);
-    res.status(500).send("Server Error");
+  if (!violation || !vehicle || !owner || !image) {
+    return res.status(400).send("Missing Data");
   }
-});
 
-// View Logs in browser
-app.get("/logs", (req, res) => {
-  const logs = JSON.parse(fs.readFileSync("logs.json"));
-  res.json(logs);
+  const time = new Date().toLocaleString();
+
+  const imageBuffer = Buffer.from(image, "base64");
+  const photoName = `photo_${Date.now()}.jpg`;
+  const photoPath = path.join("photos", photoName);
+
+  fs.writeFileSync(photoPath, imageBuffer);
+
+  violationCount++;
+
+  console.log("=====================================");
+  console.log("Violation:", violation);
+  console.log("Time:", time);
+  console.log("Vehicle:", vehicle);
+  console.log("Owner:", owner);
+  console.log("Violation Count:", violationCount);
+  console.log("=====================================");
+
+  let violationSentence = "";
+
+  if (violation === "ALCOHOL")
+    violationSentence = "Driver was operating the vehicle under the influence of alcohol.";
+
+  if (violation === "SEATBELT")
+    violationSentence = "Driver was found driving without wearing a seatbelt.";
+
+  if (violation === "DROWSINESS")
+    violationSentence = "Driver was driving in a drowsy condition posing public safety risk.";
+
+  if (violationCount >= 3) {
+
+    const challanFile = generateChallan(
+      { time, vehicle, owner, violationSentence },
+      photoPath
+    );
+
+    console.log("******** CHALLAN GENERATED ********");
+    console.log("File:", challanFile);
+    console.log("Violation counter reset.");
+    console.log("***********************************");
+
+    violationCount = 0;
+  }
+
+  res.status(200).send("OK");
 });
 
 app.listen(PORT, () => {
