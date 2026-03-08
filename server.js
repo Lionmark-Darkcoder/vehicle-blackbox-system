@@ -1,132 +1,100 @@
-const express = require("express");
-const multer = require("multer");
-const PDFDocument = require("pdfkit");
-const cors = require("cors");
-const fs = require("fs");
-const path = require("path");
+const express = require("express")
+const cors = require("cors")
+const multer = require("multer")
+const fs = require("fs")
+const PDFDocument = require("pdfkit")
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+const app = express()
 
-const PORT = process.env.PORT || 10000;
+app.use(cors())
+app.use(express.json())
 
-let logs = [];
+app.use("/uploads", express.static("uploads"))
+app.use("/challans", express.static("challans"))
 
-// --------------------
-// Image Upload Setup
-// --------------------
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/");
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + "_" + file.originalname);
-  }
-});
+ destination: "uploads/",
+ filename: (req,file,cb)=>{
+  cb(null,Date.now()+"_"+file.originalname)
+ }
+})
 
-const upload = multer({ storage: storage });
+const upload = multer({storage})
 
-if (!fs.existsSync("uploads")) {
-  fs.mkdirSync("uploads");
+const DB_FILE = "data/violations.json"
+
+function loadDB(){
+ return JSON.parse(fs.readFileSync(DB_FILE))
 }
 
-// allow viewing uploaded images
-app.use("/uploads", express.static("uploads"));
+function saveDB(data){
+ fs.writeFileSync(DB_FILE,JSON.stringify(data,null,2))
+}
 
-// --------------------
-// HOME ROUTE
-// --------------------
-app.get("/", (req, res) => {
-  res.send("Vehicle Blackbox Server Running");
-});
+function generateChallan(vehicle){
+ const doc = new PDFDocument()
 
-// --------------------
-// GET LOGS
-// --------------------
-app.get("/log", (req, res) => {
-  res.json(logs);
-});
+ const file = `challans/challan_${Date.now()}.pdf`
 
-// --------------------
-// ESP SEND EVENT
-// --------------------
-app.post("/log", (req, res) => {
+ doc.pipe(fs.createWriteStream(file))
 
-  const event = req.body.event || "UNKNOWN";
+ doc.fontSize(20).text("Motor Vehicle Department",{align:"center"})
+ doc.moveDown()
 
-  const newLog = {
-    id: logs.length + 1,
-    event: event,
-    time: new Date().toISOString()
-  };
+ doc.text("Vehicle No: "+vehicle.vehicleNo)
+ doc.text("Owner: "+vehicle.ownerName)
+ doc.text("Mobile: "+vehicle.mobile)
 
-  logs.push(newLog);
+ doc.moveDown()
 
-  console.log("New Event Logged:", newLog);
+ let total=0
 
-  res.json({
-    status: "success",
-    log: newLog
-  });
-});
+ vehicle.violations.forEach(v=>{
+  doc.text(`${v.type} | ₹${v.amount} | ${v.time}`)
+  total+=v.amount
+ })
 
-// --------------------
-// ESP IMAGE UPLOAD
-// --------------------
-app.post("/upload", upload.single("image"), (req, res) => {
+ doc.moveDown()
+ doc.text("Total Fine: ₹"+total)
 
-  if (!req.file) {
-    return res.status(400).send("No image uploaded");
-  }
+ doc.end()
 
-  console.log("Image uploaded:", req.file.filename);
+ return file
+}
 
-  res.json({
-    status: "uploaded",
-    file: req.file.filename
-  });
-});
+app.post("/upload", upload.single("image"), (req,res)=>{
 
-// --------------------
-// GENERATE CHALLAN PDF
-// --------------------
-app.get("/challan/:id", (req, res) => {
+ const {vehicleNo,ownerName,mobile,violationType} = req.body
 
-  const id = req.params.id;
-  const log = logs.find(l => l.id == id);
+ const db = loadDB()
 
-  if (!log) {
-    return res.send("Challan not found");
-  }
+ const score = db.scores[violationType] || 1
+ const fine = db.fine[violationType] || 100
 
-  const doc = new PDFDocument();
+ const violation = {
+  vehicleNo,
+  ownerName,
+  mobile,
+  type:violationType,
+  score,
+  amount:fine,
+  time:new Date().toISOString(),
+  image:`/uploads/${req.file.filename}`
+ }
 
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader(
-    "Content-Disposition",
-    "attachment; filename=challan_" + id + ".pdf"
-  );
+ db.violations.push(violation)
 
-  doc.pipe(res);
+ saveDB(db)
 
-  doc.fontSize(22).text("Vehicle Violation Challan", { align: "center" });
+ res.json({status:"logged",violation})
 
-  doc.moveDown();
-  doc.fontSize(14).text("Violation ID: " + log.id);
-  doc.text("Violation Type: " + log.event);
-  doc.text("Date: " + log.time);
-  doc.text("Fine Amount: ₹500");
+})
 
-  doc.moveDown();
-  doc.text("Issued by: Smart Vehicle Monitoring System");
+app.get("/log",(req,res)=>{
+ const db = loadDB()
+ res.json(db.violations)
+})
 
-  doc.end();
-});
-
-// --------------------
-// START SERVER
-// --------------------
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
-});
+app.listen(process.env.PORT || 10000,()=>{
+ console.log("Server running")
+})
