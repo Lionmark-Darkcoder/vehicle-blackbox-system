@@ -71,8 +71,39 @@ app.post("/upload", upload.single("image"), (req, res) => {
 
   db.violations.push(violation);
 
-  saveDB(db);
+/* calculate total score within last 12 hours */
+const twelveHoursAgo = Date.now() - (12 * 60 * 60 * 1000);
 
+const recentViolations = db.violations.filter(v => {
+  return (
+    v.vehicleNo === vehicleNo &&
+    new Date(v.time).getTime() >= twelveHoursAgo
+  );
+});
+
+let totalScore = 0;
+
+recentViolations.forEach(v => {
+  totalScore += v.score;
+});
+
+/* auto challan trigger */
+if (totalScore >= db.scoreThreshold) {
+
+  const challanData = {
+    vehicleNo,
+    ownerName,
+    mobile,
+    violations: recentViolations
+  };
+
+  const challanFile = generateChallan(challanData);
+
+  violation.challan = challanFile;
+  violation.status = "Challan Generated";
+}
+
+saveDB(db);
   res.json({
     status: "violation logged",
     data: violation
