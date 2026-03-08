@@ -1,4 +1,5 @@
 const express = require("express");
+
 const cors = require("cors");
 const multer = require("multer");
 const fs = require("fs");
@@ -8,6 +9,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use("/uploads", express.static("uploads"));
 
 /* IMPORTANT: serve folders */
 app.use("/uploads", express.static("uploads"));
