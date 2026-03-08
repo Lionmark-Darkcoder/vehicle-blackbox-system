@@ -75,8 +75,8 @@ const transporter=nodemailer.createTransport({
 service:"gmail",
 
 auth:{
-user:"yourmail@gmail.com",
-pass:"your_app_password"
+user:"drivesafeplusoffical@gmail.com",
+pass:"Drivesafe+@projectlevel"
 }
 
 });
