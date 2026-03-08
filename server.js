@@ -1,100 +1,138 @@
-const express = require("express")
-const cors = require("cors")
-const multer = require("multer")
-const fs = require("fs")
-const PDFDocument = require("pdfkit")
+const express = require("express");
+const cors = require("cors");
+const multer = require("multer");
+const fs = require("fs");
+const PDFDocument = require("pdfkit");
 
-const app = express()
+const app = express();
 
-app.use(cors())
-app.use(express.json())
+app.use(cors());
+app.use(express.json());
 
-app.use("/uploads", express.static("uploads"))
-app.use("/challans", express.static("challans"))
+/* IMPORTANT: serve folders */
+app.use("/uploads", express.static("uploads"));
+app.use("/challans", express.static("challans"));
 
+/* storage for uploaded images */
 const storage = multer.diskStorage({
- destination: "uploads/",
- filename: (req,file,cb)=>{
-  cb(null,Date.now()+"_"+file.originalname)
- }
-})
+  destination: function (req, file, cb) {
+    cb(null, "uploads/");
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + "_" + file.originalname);
+  }
+});
 
-const upload = multer({storage})
+const upload = multer({ storage: storage });
 
-const DB_FILE = "data/violations.json"
+const DB_FILE = "data/violations.json";
 
-function loadDB(){
- return JSON.parse(fs.readFileSync(DB_FILE))
+/* read database */
+function loadDB() {
+  return JSON.parse(fs.readFileSync(DB_FILE));
 }
 
-function saveDB(data){
- fs.writeFileSync(DB_FILE,JSON.stringify(data,null,2))
+/* save database */
+function saveDB(data) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-function generateChallan(vehicle){
- const doc = new PDFDocument()
+/* homepage */
+app.get("/", (req, res) => {
+  res.send("SAFEWAY Vehicle Blackbox Server Running");
+});
 
- const file = `challans/challan_${Date.now()}.pdf`
+/* get all violations */
+app.get("/log", (req, res) => {
+  const db = loadDB();
+  res.json(db.violations);
+});
 
- doc.pipe(fs.createWriteStream(file))
+/* upload violation with image */
+app.post("/upload", upload.single("image"), (req, res) => {
 
- doc.fontSize(20).text("Motor Vehicle Department",{align:"center"})
- doc.moveDown()
+  const { vehicleNo, ownerName, mobile, violationType } = req.body;
 
- doc.text("Vehicle No: "+vehicle.vehicleNo)
- doc.text("Owner: "+vehicle.ownerName)
- doc.text("Mobile: "+vehicle.mobile)
+  const db = loadDB();
 
- doc.moveDown()
+  const score = db.scores[violationType] || 1;
+  const fine = db.fine[violationType] || 100;
 
- let total=0
+  const violation = {
+    vehicleNo: vehicleNo,
+    ownerName: ownerName,
+    mobile: mobile,
+    type: violationType,
+    score: score,
+    amount: fine,
+    time: new Date().toISOString(),
+    image: `/uploads/${req.file.filename}`
+  };
 
- vehicle.violations.forEach(v=>{
-  doc.text(`${v.type} | ₹${v.amount} | ${v.time}`)
-  total+=v.amount
- })
+  db.violations.push(violation);
 
- doc.moveDown()
- doc.text("Total Fine: ₹"+total)
+  saveDB(db);
 
- doc.end()
+  res.json({
+    status: "violation logged",
+    data: violation
+  });
+});
 
- return file
-}
+/* challan generator */
+app.post("/generate-challan", (req, res) => {
 
-app.post("/upload", upload.single("image"), (req,res)=>{
+  const { vehicleNo, ownerName, mobile, violations } = req.body;
 
- const {vehicleNo,ownerName,mobile,violationType} = req.body
+  const doc = new PDFDocument();
 
- const db = loadDB()
+  const fileName = `challans/challan_${Date.now()}.pdf`;
 
- const score = db.scores[violationType] || 1
- const fine = db.fine[violationType] || 100
+  doc.pipe(fs.createWriteStream(fileName));
 
- const violation = {
-  vehicleNo,
-  ownerName,
-  mobile,
-  type:violationType,
-  score,
-  amount:fine,
-  time:new Date().toISOString(),
-  image:`/uploads/${req.file.filename}`
- }
+  /* LOGO */
+  doc.image("uploads/177298282796.png", 50, 40, { width: 100 });
 
- db.violations.push(violation)
+  doc.fontSize(20).text("SAFEWAY Smart Transportation Safety", 200, 50);
 
- saveDB(db)
+  doc.moveDown();
 
- res.json({status:"logged",violation})
+  doc.fontSize(16).text("Traffic Violation Challan", { align: "center" });
 
-})
+  doc.moveDown();
 
-app.get("/log",(req,res)=>{
- const db = loadDB()
- res.json(db.violations)
-})
+  doc.text(`Vehicle No: ${vehicleNo}`);
+  doc.text(`Owner Name: ${ownerName}`);
+  doc.text(`Mobile: ${mobile}`);
 
-app.listen(process.env.PORT || 10000,()=>{
- console.log("Server running")
-})
+  doc.moveDown();
+
+  let total = 0;
+
+  violations.forEach(v => {
+    doc.text(`${v.type}  |  ₹${v.amount}  |  ${v.time}`);
+    total += v.amount;
+  });
+
+  doc.moveDown();
+
+  doc.fontSize(16).text(`Total Fine: ₹${total}`);
+
+  doc.moveDown();
+
+  doc.text("Reported by SAFEWAY Smart Transportation Safety");
+
+  doc.end();
+
+  res.json({
+    message: "Challan generated",
+    challan: fileName
+  });
+});
+
+/* start server */
+const PORT = process.env.PORT || 10000;
+
+app.listen(PORT, () => {
+  console.log("SAFEWAY server running on port " + PORT);
+});
