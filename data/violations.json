@@ -1,0 +1,24 @@
+{
+  "violations": [],
+  "scoreThreshold": 5,
+  "scores": {
+    "seatbelt": 1,
+    "dooropen": 1,
+    "harshbrake": 3,
+    "overspeed": 3,
+    "alcohol_low": 3,
+    "alcohol_high": 5,
+    "drowsiness": 5,
+    "harshdriving": 5
+  },
+  "fine": {
+    "seatbelt": 200,
+    "dooropen": 200,
+    "harshbrake": 500,
+    "overspeed": 1000,
+    "alcohol_low": 1500,
+    "alcohol_high": 3000,
+    "drowsiness": 2000,
+    "harshdriving": 2000
+  }
+}
