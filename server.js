@@ -1,113 +1,132 @@
 const express = require("express");
+const multer = require("multer");
+const PDFDocument = require("pdfkit");
+const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
-const PDFDocument = require("pdfkit");
 
 const app = express();
-const PORT = 3000;
+app.use(cors());
+app.use(express.json());
 
-app.use(express.json({ limit: "20mb" }));
+const PORT = process.env.PORT || 10000;
 
-if (!fs.existsSync("photos")) fs.mkdirSync("photos");
-if (!fs.existsSync("challans")) fs.mkdirSync("challans");
+let logs = [];
 
-let violationCount = 0;
-
-// ================= CHALLAN GENERATOR =================
-function generateChallan(data, imagePath) {
-
-  const fileName = `RTO_CHALLAN_${Date.now()}.pdf`;
-  const filePath = path.join("challans", fileName);
-
-  const doc = new PDFDocument();
-  doc.pipe(fs.createWriteStream(filePath));
-
-  doc.fontSize(18).text("GOVERNMENT OF INDIA", { align: "center" });
-  doc.fontSize(16).text("REGIONAL TRANSPORT OFFICE (RTO)", { align: "center" });
-  doc.moveDown();
-  doc.fontSize(14).text("TRAFFIC VIOLATION CHALLAN", { align: "center" });
-  doc.moveDown(2);
-
-  doc.fontSize(12);
-  doc.text(`Challan No: ${Date.now()}`);
-  doc.text(`Date & Time: ${data.time}`);
-  doc.moveDown();
-
-  doc.text(`Vehicle Number: ${data.vehicle}`);
-  doc.text(`Owner Name: ${data.owner}`);
-  doc.moveDown();
-
-  doc.text("Violation Details:");
-  doc.text(data.violationSentence);
-  doc.moveDown();
-
-  doc.text("Evidence Image:");
-  doc.image(imagePath, { fit: [250, 200], align: "center" });
-  doc.moveDown();
-
-  doc.text("Fine Amount: ₹ 2000", { underline: true });
-
-  doc.end();
-
-  return fileName;
-}
-
-// ================= ROUTE =================
-app.post("/upload", (req, res) => {
-
-  const { violation, vehicle, owner, image } = req.body;
-
-  if (!violation || !vehicle || !owner || !image) {
-    return res.status(400).send("Missing Data");
+// --------------------
+// Image Upload Setup
+// --------------------
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, "uploads/");
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + "_" + file.originalname);
   }
-
-  const time = new Date().toLocaleString();
-
-  const imageBuffer = Buffer.from(image, "base64");
-  const photoName = `photo_${Date.now()}.jpg`;
-  const photoPath = path.join("photos", photoName);
-
-  fs.writeFileSync(photoPath, imageBuffer);
-
-  violationCount++;
-
-  console.log("=====================================");
-  console.log("Violation:", violation);
-  console.log("Time:", time);
-  console.log("Vehicle:", vehicle);
-  console.log("Owner:", owner);
-  console.log("Violation Count:", violationCount);
-  console.log("=====================================");
-
-  let violationSentence = "";
-
-  if (violation === "ALCOHOL")
-    violationSentence = "Driver was operating the vehicle under the influence of alcohol.";
-
-  if (violation === "SEATBELT")
-    violationSentence = "Driver was found driving without wearing a seatbelt.";
-
-  if (violation === "DROWSINESS")
-    violationSentence = "Driver was driving in a drowsy condition posing public safety risk.";
-
-  if (violationCount >= 3) {
-
-    const challanFile = generateChallan(
-      { time, vehicle, owner, violationSentence },
-      photoPath
-    );
-
-    console.log("******** CHALLAN GENERATED ********");
-    console.log("File:", challanFile);
-    console.log("Violation counter reset.");
-    console.log("***********************************");
-
-    violationCount = 0;
-  }
-
-  res.status(200).send("OK");
 });
 
+const upload = multer({ storage: storage });
+
+if (!fs.existsSync("uploads")) {
+  fs.mkdirSync("uploads");
+}
+
+// allow viewing uploaded images
+app.use("/uploads", express.static("uploads"));
+
+// --------------------
+// HOME ROUTE
+// --------------------
+app.get("/", (req, res) => {
+  res.send("Vehicle Blackbox Server Running");
+});
+
+// --------------------
+// GET LOGS
+// --------------------
+app.get("/log", (req, res) => {
+  res.json(logs);
+});
+
+// --------------------
+// ESP SEND EVENT
+// --------------------
+app.post("/log", (req, res) => {
+
+  const event = req.body.event || "UNKNOWN";
+
+  const newLog = {
+    id: logs.length + 1,
+    event: event,
+    time: new Date().toISOString()
+  };
+
+  logs.push(newLog);
+
+  console.log("New Event Logged:", newLog);
+
+  res.json({
+    status: "success",
+    log: newLog
+  });
+});
+
+// --------------------
+// ESP IMAGE UPLOAD
+// --------------------
+app.post("/upload", upload.single("image"), (req, res) => {
+
+  if (!req.file) {
+    return res.status(400).send("No image uploaded");
+  }
+
+  console.log("Image uploaded:", req.file.filename);
+
+  res.json({
+    status: "uploaded",
+    file: req.file.filename
+  });
+});
+
+// --------------------
+// GENERATE CHALLAN PDF
+// --------------------
+app.get("/challan/:id", (req, res) => {
+
+  const id = req.params.id;
+  const log = logs.find(l => l.id == id);
+
+  if (!log) {
+    return res.send("Challan not found");
+  }
+
+  const doc = new PDFDocument();
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    "attachment; filename=challan_" + id + ".pdf"
+  );
+
+  doc.pipe(res);
+
+  doc.fontSize(22).text("Vehicle Violation Challan", { align: "center" });
+
+  doc.moveDown();
+  doc.fontSize(14).text("Violation ID: " + log.id);
+  doc.text("Violation Type: " + log.event);
+  doc.text("Date: " + log.time);
+  doc.text("Fine Amount: ₹500");
+
+  doc.moveDown();
+  doc.text("Issued by: Smart Vehicle Monitoring System");
+
+  doc.end();
+});
+
+// --------------------
+// START SERVER
+// --------------------
 app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+  console.log("Server running on port", PORT);
 });
