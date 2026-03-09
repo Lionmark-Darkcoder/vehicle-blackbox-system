@@ -1,14 +1,1 @@
-[
-  {
-    "id": 1773036360663,
-    "vehicleNo": "KL07AB1234",
-    "ownerName": "Arun Mohan",
-    "mobile": "8590749126",
-    "violationType": "seatbelt",
-    "score": 1,
-    "fine": 500,
-    "time": "2026-03-09T10:00:00.000Z",
-    "imageUrl": "",
-    "status": "pending"
-  }
-]
+[]
