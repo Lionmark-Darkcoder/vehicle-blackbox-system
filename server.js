@@ -1,284 +1,244 @@
 const express = require("express");
-const multer = require("multer");
-const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
+const multer = require("multer");
 const nodemailer = require("nodemailer");
 
 const app = express();
-
-app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-/* expose folders */
+// folders
+const uploadDir = path.join(__dirname, "uploads");
+const dataDir = path.join(__dirname, "data");
+const challanDir = path.join(__dirname, "challans");
 
-app.use("/uploads", express.static(path.join(__dirname,"uploads")));
-app.use("/challans", express.static(path.join(__dirname,"challans")));
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir);
+if (!fs.existsSync(challanDir)) fs.mkdirSync(challanDir);
 
-/* create folders */
+// serve images
+app.use("/uploads", express.static(uploadDir));
+app.use("/challans", express.static(challanDir));
 
-["uploads","challans","data"].forEach(folder=>{
-if(!fs.existsSync(folder)){
-fs.mkdirSync(folder);
+// storage
+const storage = multer.diskStorage({
+destination: (req, file, cb) => cb(null, uploadDir),
+filename: (req, file, cb) =>
+cb(null, Date.now() + path.extname(file.originalname))
+});
+
+const upload = multer({ storage });
+
+// violation storage
+const dataFile = path.join(dataDir, "violations.json");
+
+function readData() {
+if (!fs.existsSync(dataFile)) return [];
+return JSON.parse(fs.readFileSync(dataFile));
+}
+
+function saveData(data) {
+fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+}
+
+// scoring system
+function getScore(type) {
+
+switch(type){
+
+case "seatbelt":
+case "door_open":
+return 1;
+
+case "harsh_brake":
+case "alcohol_low":
+return 3;
+
+case "drowsy":
+case "harsh_driving":
+case "alcohol_high":
+return 5;
+
+default:
+return 1;
+}
+}
+
+// fine table
+function getFine(type){
+
+switch(type){
+
+case "seatbelt":
+return 500;
+
+case "door_open":
+return 500;
+
+case "harsh_brake":
+return 1000;
+
+case "alcohol_low":
+return 2000;
+
+case "drowsy":
+return 3000;
+
+case "harsh_driving":
+return 3000;
+
+case "alcohol_high":
+return 5000;
+
+default:
+return 500;
+}
+}
+
+// mail transporter
+const transporter = nodemailer.createTransport({
+service: "gmail",
+auth: {
+user: process.env.EMAIL_USER,
+pass: process.env.EMAIL_PASS
 }
 });
 
-/* database */
+// root
+app.get("/", (req,res)=>{
+res.send("SAFEWAY Vehicle Blackbox Server Running");
+});
 
-const DB_FILE="data/violations.json";
+// log violations
+app.get("/log",(req,res)=>{
+res.json(readData());
+});
 
-if(!fs.existsSync(DB_FILE)){
-fs.writeFileSync(DB_FILE,JSON.stringify({violations:[]},null,2));
-}
+// test violation
+app.get("/testViolation",(req,res)=>{
 
-function readDB(){
-return JSON.parse(fs.readFileSync(DB_FILE));
-}
+const violations = readData();
 
-function saveDB(data){
-fs.writeFileSync(DB_FILE,JSON.stringify(data,null,2));
-}
-
-/* violation scoring */
-
-const violationScores={
-seatbelt:1,
-dooropen:1,
-alcohol_low:3,
-harshbrake:3,
-overspeed:3,
-alcohol_high:5,
-rashdriving:5,
-drowsy:5
+const v = {
+id: Date.now(),
+vehicleNo: "KL07AB1234",
+ownerName: "Test Owner",
+mobile: "9999999999",
+violationType: "seatbelt",
+score: getScore("seatbelt"),
+fine: getFine("seatbelt"),
+time: new Date(),
+imageUrl: "/uploads/sample.jpg",
+status: "pending"
 };
 
-/* multer upload */
+violations.push(v);
+saveData(violations);
 
-const storage=multer.diskStorage({
-
-destination:function(req,file,cb){
-cb(null,"uploads/");
-},
-
-filename:function(req,file,cb){
-cb(null,Date.now()+path.extname(file.originalname));
-}
-
+res.json({message:"Test violation added",data:v});
 });
 
-const upload=multer({storage:storage});
+// upload violation from ESP
+app.post("/upload", upload.single("image"), async (req,res)=>{
 
-/* mail system */
-
-const transporter=nodemailer.createTransport({
-
-service:"gmail",
-
-auth:{
-user:"drivesafeplusoffical@gmail.com",
-pass:"Drivesafe+@projectlevel"
-}
-
-});
-
-/* home */
-
-app.get("/",(req,res)=>{
-
-res.send("SAFEWAY Vehicle Blackbox Server Running");
-
-});
-
-/* fetch violations */
-
-app.get("/log",(req,res)=>{
-
-const db=readDB();
-
-res.json(db.violations);
-
-});
-
-/* upload violation */
-
-app.post("/upload",upload.single("image"),(req,res)=>{
-
-const db=readDB();
+try{
 
 const {
 vehicleNo,
 ownerName,
 mobile,
-ownerEmail,
 violationType
-}=req.body;
+} = req.body;
 
-const score=violationScores[violationType]||1;
+const score = getScore(violationType);
+const fine = getFine(violationType);
 
-const violation={
+const violations = readData();
 
-id:Date.now(),
+const v = {
 
+id: Date.now(),
 vehicleNo,
-
 ownerName,
-
 mobile,
-
-ownerEmail,
-
 violationType,
-
 score,
-
-time:new Date(),
-
-image:req.file?"/uploads/"+req.file.filename:null
+fine,
+time: new Date(),
+imageUrl: "/uploads/" + req.file.filename,
+status: "pending"
 
 };
 
-db.violations.push(violation);
+violations.push(v);
 
-/* check last 12 hours */
+saveData(violations);
 
-const twelveHoursAgo=Date.now()-(126060*1000);
+// auto challan if score >=5
+if(score >=5){
 
-const recent=db.violations.filter(v=>
+const challan = {
 
-v.vehicleNo===vehicleNo &&
-new Date(v.time).getTime()>twelveHoursAgo
+vehicleNo,
+ownerName,
+mobile,
+violationType,
+fine,
+date: new Date()
 
+};
+
+const challanFile =
+"challan_" + Date.now() + ".json";
+
+fs.writeFileSync(
+path.join(challanDir, challanFile),
+JSON.stringify(challan,null,2)
 );
 
-let totalScore=0;
+// send mail
 
-recent.forEach(v=>{
+await transporter.sendMail({
 
-totalScore+=v.score;
+from: process.env.EMAIL_USER,
+to: process.env.ALERT_EMAIL,
+subject: "Traffic Violation Detected",
 
-});
+text: `
+Vehicle : ${vehicleNo}
 
-/* challan trigger */
+Owner : ${ownerName}
 
-if(totalScore>=5){
+Violation : ${violationType}
 
-const challanName="challan_"+Date.now()+".txt";
+Fine : ₹${fine}
 
-const challanContent=`
-
-SAFEWAY TRAFFIC VIOLATION CHALLAN
-
-Vehicle No: ${vehicleNo}
-Owner: ${ownerName}
-Mobile: ${mobile}
-
-Violations:
-
-${recent.map(v=>
-
-v.violationType+
-" | Score:"+v.score+
-" | "+v.time
-
-).join("\n")}
-
-Total Score: ${totalScore}
-
-Fine Amount: ₹2000
-
-Status: Multiple Violations
-Reported By SAFEWAY Smart Transport System
-
-`;
-
-fs.writeFileSync("challans/"+challanName,challanContent);
-
-violation.challan="/challans/"+challanName;
-
-violation.status="Challan Generated";
-
-/* send email */
-
-if(ownerEmail){
-
-transporter.sendMail({
-
-from:"yourmail@gmail.com",
-
-to:ownerEmail,
-
-subject:"Traffic Violation Alert",
-
-text:`
-
-Multiple violations detected.
-
-Vehicle: ${vehicleNo}
-
-A challan has been generated.
-
-Please check the attachment or visit dashboard.
-`,
-
-attachments:[
-
- {
-  filename:challanName,
-  path:path.join(__dirname,"challans",challanName)
- }
-
-]
+Your challan has been generated.
+`
 
 });
 
 }
-
-}
-
-saveDB(db);
 
 res.json({
-
-message:"Violation Logged",
-
-popup:true,
-
-violation
-
+status:"ok",
+violation:v
 });
 
+}catch(err){
+
+res.status(500).json({
+error:err.message
 });
-
-/* fake payment */
-
-app.post("/pay/:id",(req,res)=>{
-
-const db=readDB();
-
-const violation=db.violations.find(v=>v.id==req.params.id);
-
-if(violation){
-
-violation.payment="PAID";
 
 }
 
-saveDB(db);
-
-res.json({
-
-message:"Payment Successful"
-
 });
 
-});
+// server
+const PORT = process.env.PORT || 3000;
 
-/* start server */
-
-const PORT=process.env.PORT||3000;
-
-app.listen(PORT,()=>{
-
-console.log("SAFEWAY Server Running on "+PORT);
-
+app.listen(PORT, ()=>{
+console.log("Server running on port",PORT);
 });
