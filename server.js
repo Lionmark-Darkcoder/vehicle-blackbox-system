@@ -2,7 +2,9 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const multer = require("multer");
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
+
+const resend = new Resend("re_Yjm2JBXZ_5JTQCtKmX5UthN1fdepKKze7");
 const PDFDocument = require("pdfkit");
 const path = require("path");
 
@@ -180,36 +182,25 @@ app.post("/violation", upload.single("image"), async (req, res) => {
 
    const pdf = generatePDF(v);
 
-   transporter.sendMail({
+   await resend.emails.send({
+ from: "onboarding@resend.dev",
+ to: "sjthirtysix@gmail.com",
+ subject: "SAFEWAY Challan Generated",
+ html: `
+ <h2>Multiple Violations Detected</h2>
 
-    from: "drivesafeplusoffical@gmail.com",
-    to: "sjthirtysix@gmail.com",
-    subject: "SAFEWAY Challan Generated",
+ <p><b>Vehicle:</b> ${v.vehicleNo}</p>
+ <p><b>Violation:</b> ${v.violationType}</p>
+ <p><b>Fine:</b> ₹${v.fine}</p>
 
-    text: `
-Multiple violations detected.
-
-Vehicle: ${v.vehicleNo}
-Violation: ${v.violationType}
-Fine: ₹${v.fine}
-
-Visit dashboard:
-https://vehicle-blackbox-system-1.onrender.com
-`,
-
-    attachments: [
-     {
-      filename: "challan.pdf",
-      path: pdf
-     }
-    ]
-
-   }, (err, info) => {
-
-    if (err) console.log("EMAIL ERROR:", err);
-    else console.log("EMAIL SENT:", info.response);
-
-   });
+ <p>
+ View full challan:
+ <a href="https://vehicle-blackbox-system-1.onrender.com">
+ Open Dashboard
+ </a>
+ </p>
+ `
+});
 
   }
 
