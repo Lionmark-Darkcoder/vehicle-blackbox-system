@@ -2,8 +2,9 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const multer = require("multer");
+const nodemailer = require("nodemailer");
+const PDFDocument = require("pdfkit");
 const path = require("path");
-const { Resend } = require("resend");
 
 const app = express();
 
@@ -11,12 +12,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ---------------- EMAIL API ----------------
-
-const resend = new Resend("re_HpL7HyqZ_L6QyjWqBhCzSFW2UTekt1EuV");
-
-
-// ---------------- FILE PATHS ----------------
+// ---------------- PATHS ----------------
 
 const DATA_FILE = "./data/violations.json";
 const UPLOAD_DIR = "./uploads";
@@ -42,7 +38,21 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 
-// ---------------- DATABASE ----------------
+// ---------------- EMAIL ----------------
+
+const transporter = nodemailer.createTransport({
+
+ service: "gmail",
+
+ auth: {
+  user: "drivesafeplusoffical@gmail.com",
+  pass: "YOUR_GMAIL_APP_PASSWORD"
+ }
+
+});
+
+
+// ---------------- DATA ----------------
 
 function readData() {
  return JSON.parse(fs.readFileSync(DATA_FILE));
@@ -53,19 +63,19 @@ function saveData(data) {
 }
 
 
-// ---------------- SCORING ----------------
+// ---------------- SCORE ----------------
 
-function getScore(type) {
+function getScore(type){
 
- if (type === "seatbelt") return 1;
- if (type === "doorOpen") return 1;
+ if(type==="seatbelt") return 1;
+ if(type==="doorOpen") return 1;
 
- if (type === "harshBraking") return 3;
- if (type === "alcoholLow") return 3;
+ if(type==="harshBraking") return 3;
+ if(type==="alcoholLow") return 3;
 
- if (type === "alcoholHigh") return 5;
- if (type === "drowsyDriving") return 5;
- if (type === "harshDriving") return 5;
+ if(type==="alcoholHigh") return 5;
+ if(type==="drowsyDriving") return 5;
+ if(type==="harshDriving") return 5;
 
  return 1;
 }
@@ -73,47 +83,103 @@ function getScore(type) {
 
 // ---------------- FINE ----------------
 
-function getFine(type) {
+function getFine(type){
 
- if (type === "seatbelt") return 500;
- if (type === "doorOpen") return 500;
+ if(type==="seatbelt") return 500;
+ if(type==="doorOpen") return 500;
 
- if (type === "harshBraking") return 1000;
- if (type === "alcoholLow") return 2000;
+ if(type==="harshBraking") return 1000;
+ if(type==="alcoholLow") return 2000;
 
- if (type === "alcoholHigh") return 5000;
- if (type === "drowsyDriving") return 5000;
- if (type === "harshDriving") return 5000;
+ if(type==="alcoholHigh") return 5000;
+ if(type==="drowsyDriving") return 5000;
+ if(type==="harshDriving") return 5000;
 
  return 500;
 }
 
 
-// ---------------- SERVER ROUTES ----------------
+// ---------------- PDF ----------------
 
-app.get("/", (req, res) => {
+function generatePDF(v){
 
- res.send("SAFEWAY Vehicle Blackbox Server Running");
+ const file = `./data/challan_${v.id}.pdf`;
+
+ const doc = new PDFDocument();
+
+ doc.pipe(fs.createWriteStream(file));
+
+ doc.fontSize(20).text("TRAFFIC VIOLATION CHALLAN",{align:"center"});
+
+ doc.moveDown();
+
+ doc.text(`Vehicle Number: ${v.vehicleNo}`);
+ doc.text(`Owner Name: ${v.ownerName}`);
+ doc.text(`Violation: ${v.violationType}`);
+ doc.text(`Fine Amount: ₹${v.fine}`);
+ doc.text(`Date: ${new Date().toLocaleString()}`);
+
+ doc.moveDown();
+
+ doc.text("Motor Vehicle Department");
+ doc.text("Smart Monitoring Unit");
+
+ doc.end();
+
+ return file;
+
+}
+
+
+// ---------------- EMAIL SEND ----------------
+
+async function sendEmail(v,pdfFile){
+
+ await transporter.sendMail({
+
+  from:"drivesafeplusoffical@gmail.com",
+
+  to:"sjthirtysix@gmail.com",
+
+  subject:"Traffic Violation Challan",
+
+  text:`Vehicle ${v.vehicleNo} committed ${v.violationType}. Fine ₹${v.fine}. See attached challan.`,
+
+  attachments:[
+   {
+    filename:"challan.pdf",
+    path:pdfFile
+   }
+  ]
+
+ });
+
+}
+
+
+// ---------------- HOME ----------------
+
+app.get("/",(req,res)=>{
+
+ res.send("Vehicle Blackbox Server Running");
 
 });
 
 
-// GET ALL VIOLATIONS
+// ---------------- LOG ----------------
 
-app.get("/log", (req, res) => {
+app.get("/log",(req,res)=>{
 
- const data = readData();
-
- res.json(data);
+ res.json(readData());
 
 });
 
 
-// ---------------- ADD VIOLATION ----------------
+// ---------------- VIOLATION ----------------
 
-app.post("/violation", upload.single("image"), async (req, res) => {
+app.post("/violation",upload.single("image"),async(req,res)=>{
 
- try {
+ try{
 
   const violations = readData();
 
@@ -121,22 +187,25 @@ app.post("/violation", upload.single("image"), async (req, res) => {
 
   const v = {
 
-   id: Date.now(),
-   vehicleNo: req.body.vehicleNo || "KL07AB1234",
-   ownerName: "Vehicle Owner",
-   mobile: "9999999999",
+   id:Date.now(),
 
-   violationType: type,
+   vehicleNo:req.body.vehicleNo || "KL07AB1234",
 
-   score: getScore(type),
+   ownerName:"Vehicle Owner",
 
-   fine: getFine(type),
+   mobile:"9999999999",
 
-   time: new Date(),
+   violationType:type,
 
-   imageUrl: req.file ? "/uploads/" + req.file.filename : "",
+   score:getScore(type),
 
-   status: "pending"
+   fine:getFine(type),
+
+   time:new Date(),
+
+   imageUrl:req.file ? "/uploads/"+req.file.filename : "",
+
+   status:"pending"
 
   };
 
@@ -145,80 +214,59 @@ app.post("/violation", upload.single("image"), async (req, res) => {
   saveData(violations);
 
 
-  // SEND EMAIL IF HIGH RISK VIOLATION
+  if(v.score >= 5){
 
-  if (v.score >= 5) {
+   const pdf = generatePDF(v);
 
-   await resend.emails.send({
-
-    from: "onboarding@resend.dev",
-
-    to: "sjthirtysix@gmail.com",
-
-    subject: "SAFEWAY Challan Generated",
-
-    html: `
-    <h2>Traffic Violation Detected</h2>
-
-    <p><b>Vehicle:</b> ${v.vehicleNo}</p>
-
-    <p><b>Violation:</b> ${v.violationType}</p>
-
-    <p><b>Fine:</b> ₹${v.fine}</p>
-
-    <p>
-    Visit dashboard for details:
-    https://vehicle-blackbox-system-1.onrender.com
-    </p>
-    `
-   });
+   await sendEmail(v,pdf);
 
   }
 
   res.json({
-   status: "ok",
-   violation: v
+   status:"ok",
+   violation:v
   });
 
- } catch (err) {
+ }catch(err){
 
   console.log(err);
 
-  res.status(500).json({
-   error: err.message
-  });
+  res.status(500).json({error:err.message});
 
  }
 
 });
 
 
-// ---------------- TEST ROUTE ----------------
+// ---------------- TEST ----------------
 
-app.get("/testViolation", async (req, res) => {
+app.get("/testViolation",async(req,res)=>{
 
- try {
+ try{
 
   const violations = readData();
 
   const v = {
 
-   id: Date.now(),
-   vehicleNo: "KL07AB1234",
-   ownerName: "Test Owner",
-   mobile: "9999999999",
+   id:Date.now(),
 
-   violationType: "drowsyDriving",
+   vehicleNo:"KL07AB1234",
 
-   score: 5,
+   ownerName:"Test Owner",
 
-   fine: 5000,
+   mobile:"9999999999",
 
-   time: new Date(),
+   violationType:"drowsyDriving",
 
-   imageUrl: "",
+   score:5,
 
-   status: "pending"
+   fine:5000,
+
+   time:new Date(),
+
+   imageUrl:"",
+
+   status:"pending"
 
   };
 
@@ -226,38 +274,20 @@ app.get("/testViolation", async (req, res) => {
 
   saveData(violations);
 
+  const pdf = generatePDF(v);
 
-  await resend.emails.send({
-
-   from: "onboarding@resend.dev",
-
-   to: "sjthirtysix@gmail.com",
-
-   subject: "SAFEWAY Test Challan",
-
-   html: `
-   <h2>Test Violation Generated</h2>
-
-   <p><b>Vehicle:</b> ${v.vehicleNo}</p>
-
-   <p><b>Violation:</b> ${v.violationType}</p>
-
-   <p><b>Fine:</b> ₹${v.fine}</p>
-   `
-  });
+  await sendEmail(v,pdf);
 
   res.json({
-   message: "Test violation created and email sent",
-   data: v
+   message:"Test violation created and email sent",
+   data:v
   });
 
- } catch (err) {
+ }catch(err){
 
   console.log(err);
 
-  res.status(500).json({
-   error: err.message
-  });
+  res.status(500).json({error:err.message});
 
  }
 
@@ -268,8 +298,8 @@ app.get("/testViolation", async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 
-app.listen(PORT, () => {
+app.listen(PORT,()=>{
 
- console.log("Server running on port", PORT);
+ console.log("Server running on port",PORT);
 
 });
