@@ -40,7 +40,7 @@ const transporter = nodemailer.createTransport({
  service: "gmail",
  auth: {
   user: "drivesafeplusoffical@gmail.com",
-  pass: "Drivesafe+@projectlevel"
+  pass: "bjorfludlgltrkzc"
  }
 });
 
