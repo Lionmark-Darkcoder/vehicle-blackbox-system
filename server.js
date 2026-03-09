@@ -7,10 +7,12 @@ const PDFDocument = require("pdfkit");
 const path = require("path");
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// folders
 const DATA_FILE = "./data/violations.json";
 const UPLOAD_DIR = "./uploads";
 
@@ -20,6 +22,8 @@ if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, "[]");
 
 app.use("/uploads", express.static(UPLOAD_DIR));
 
+
+// ---------------- FILE UPLOAD ----------------
 const storage = multer.diskStorage({
  destination: function (req, file, cb) {
   cb(null, UPLOAD_DIR);
@@ -31,6 +35,8 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
+
+// ---------------- EMAIL SETUP ----------------
 const transporter = nodemailer.createTransport({
  service: "gmail",
  auth: {
@@ -39,6 +45,9 @@ const transporter = nodemailer.createTransport({
  }
 });
 
+
+// ---------------- HELPER FUNCTIONS ----------------
+
 function readData() {
  return JSON.parse(fs.readFileSync(DATA_FILE));
 }
@@ -46,6 +55,7 @@ function readData() {
 function saveData(data) {
  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
+
 
 function getScore(type) {
 
@@ -62,6 +72,7 @@ function getScore(type) {
  return 1;
 }
 
+
 function getFine(type) {
 
  if (type === "seatbelt") return 500;
@@ -77,6 +88,9 @@ function getFine(type) {
  return 500;
 }
 
+
+// ---------------- CHALLAN PDF ----------------
+
 function generateChallanPDF(v) {
 
  const filePath = "./data/challan_" + v.id + ".pdf";
@@ -85,7 +99,7 @@ function generateChallanPDF(v) {
 
  doc.pipe(fs.createWriteStream(filePath));
 
- doc.fontSize(20).text("SAFEWAY TRAFFIC VIOLATION CHALLAN", { align: "center" });
+ doc.fontSize(20).text("SAFEWAY TRAFFIC CHALLAN", { align: "center" });
 
  doc.moveDown();
 
@@ -97,16 +111,23 @@ function generateChallanPDF(v) {
  doc.text("Date: " + new Date().toLocaleString());
 
  doc.moveDown();
- doc.text("SAFEWAY Smart Vehicle Monitoring System");
+
+ doc.text("Multiple violations detected.");
+ doc.text("Data forwarded to authorities.");
 
  doc.end();
 
  return filePath;
 }
 
+
+// ---------------- ROUTES ----------------
+
+
 app.get("/", (req, res) => {
  res.send("SAFEWAY Vehicle Blackbox Server Running");
 });
+
 
 app.get("/log", (req, res) => {
 
@@ -114,6 +135,9 @@ app.get("/log", (req, res) => {
  res.json(violations);
 
 });
+
+
+// ---------------- ADD VIOLATION ----------------
 
 app.post("/violation", upload.single("image"), async (req, res) => {
 
@@ -141,37 +165,43 @@ app.post("/violation", upload.single("image"), async (req, res) => {
   violations.push(v);
   saveData(violations);
 
+
+  // EMAIL ONLY WHEN SCORE >=5
   if (v.score >= 5) {
 
    const pdfPath = generateChallanPDF(v);
 
    await transporter.sendMail({
+
     from: "drivesafeplusoffical@gmail.com",
     to: "sjthirtysix@gmail.com",
-    subject: "SAFEWAY Traffic Challan Generated",
+
+    subject: "SAFEWAY Challan Generated",
+
     text: `
 Multiple violations detected.
 
 A traffic challan has been generated for your vehicle.
 
-Vehicle Number: ${v.vehicleNo}
+Vehicle: ${v.vehicleNo}
 Violation: ${v.violationType}
-Fine Amount: ₹${v.fine}
+Fine: ₹${v.fine}
 
-Please check the attached challan.
-
-Visit dashboard:
+Visit the dashboard for more details:
 https://vehicle-blackbox-system-1.onrender.com
 `,
+
     attachments: [
      {
       filename: "challan.pdf",
       path: pdfPath
      }
     ]
+
    });
 
   }
+
 
   res.json({
    status: "ok",
@@ -187,6 +217,9 @@ https://vehicle-blackbox-system-1.onrender.com
  }
 
 });
+
+
+// ---------------- TEST ROUTE ----------------
 
 app.get("/testViolation", async (req, res) => {
 
@@ -213,20 +246,25 @@ app.get("/testViolation", async (req, res) => {
   const pdfPath = generateChallanPDF(v);
 
   await transporter.sendMail({
+
    from: "drivesafeplusoffical@gmail.com",
    to: "sjthirtysix@gmail.com",
-   subject: "SAFEWAY Test Challan Generated",
-   text: "Multiple violations detected. Challan generated. Please see attachment.",
+
+   subject: "SAFEWAY Test Challan",
+
+   text: "Multiple violations detected. Challan generated. See attachment.",
+
    attachments: [
     {
      filename: "challan.pdf",
      path: pdfPath
     }
    ]
+
   });
 
   res.json({
-   message: "Test violation added and email sent",
+   message: "Test violation + email sent",
    data: v
   });
 
@@ -239,6 +277,9 @@ app.get("/testViolation", async (req, res) => {
  }
 
 });
+
+
+// ---------------- SERVER START ----------------
 
 const PORT = process.env.PORT || 10000;
 
