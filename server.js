@@ -40,11 +40,16 @@ const upload = multer({ storage });
 // ---------------- EMAIL SETUP ----------------
 
 const transporter = nodemailer.createTransport({
- service: "gmail",
+ host: "smtp.gmail.com",
+ port: 465,
+ secure: true,
  auth: {
   user: "drivesafeplusoffical@gmail.com",
   pass: "bjorfludlgltrkzc"
- }
+ },
+ connectionTimeout: 20000,
+ greetingTimeout: 20000,
+ socketTimeout: 20000
 });
 
 
@@ -117,7 +122,6 @@ function generatePDF(v) {
  doc.text("Date: " + new Date().toLocaleString());
 
  doc.moveDown();
-
  doc.text("Multiple violations detected.");
  doc.text("Data forwarded to authorities.");
 
@@ -130,37 +134,28 @@ function generatePDF(v) {
 // ---------------- ROUTES ----------------
 
 app.get("/", (req, res) => {
-
  res.send("SAFEWAY Vehicle Blackbox Server Running");
-
 });
 
-
-// get all violations
 
 app.get("/log", (req, res) => {
-
  const violations = readData();
-
  res.json(violations);
-
 });
 
 
-// add violation
+// ---------------- ADD VIOLATION ----------------
 
 app.post("/violation", upload.single("image"), async (req, res) => {
 
  try {
 
   const violations = readData();
-
   const type = req.body.type || "seatbelt";
 
   const imagePath = req.file ? "/uploads/" + req.file.filename : "";
 
   const v = {
-
    id: Date.now(),
    vehicleNo: req.body.vehicleNo || "KL07AB1234",
    ownerName: "Vehicle Owner",
@@ -171,23 +166,15 @@ app.post("/violation", upload.single("image"), async (req, res) => {
    time: new Date(),
    imageUrl: imagePath,
    status: "pending"
-
   };
 
   violations.push(v);
-
   saveData(violations);
-
-
-  // send response immediately
 
   res.json({
    status: "ok",
    violation: v
   });
-
-
-  // generate challan + email only if serious violation
 
   if (v.score >= 5) {
 
@@ -197,13 +184,10 @@ app.post("/violation", upload.single("image"), async (req, res) => {
 
     from: "drivesafeplusoffical@gmail.com",
     to: "sjthirtysix@gmail.com",
-
     subject: "SAFEWAY Challan Generated",
 
     text: `
 Multiple violations detected.
-
-A traffic challan has been generated.
 
 Vehicle: ${v.vehicleNo}
 Violation: ${v.violationType}
@@ -220,7 +204,12 @@ https://vehicle-blackbox-system-1.onrender.com
      }
     ]
 
-   }).catch(err => console.log(err));
+   }, (err, info) => {
+
+    if (err) console.log("EMAIL ERROR:", err);
+    else console.log("EMAIL SENT:", info.response);
+
+   });
 
   }
 
@@ -244,7 +233,6 @@ app.get("/testViolation", (req, res) => {
   const violations = readData();
 
   const v = {
-
    id: Date.now(),
    vehicleNo: "KL07AB1234",
    ownerName: "Test Owner",
@@ -255,32 +243,23 @@ app.get("/testViolation", (req, res) => {
    time: new Date(),
    imageUrl: "",
    status: "pending"
-
   };
 
   violations.push(v);
-
   saveData(violations);
-
-
-  // send response first
 
   res.json({
    message: "Test violation added",
    data: v
   });
 
-
   const pdf = generatePDF(v);
-
 
   transporter.sendMail({
 
    from: "drivesafeplusoffical@gmail.com",
    to: "sjthirtysix@gmail.com",
-
    subject: "SAFEWAY Test Challan",
-
    text: "Multiple violations detected. Challan generated. See attachment.",
 
    attachments: [
@@ -290,8 +269,12 @@ app.get("/testViolation", (req, res) => {
     }
    ]
 
-  }).catch(err => console.log(err));
+  }, (err, info) => {
 
+   if (err) console.log("EMAIL ERROR:", err);
+   else console.log("EMAIL SENT:", info.response);
+
+  });
 
  } catch (err) {
 
@@ -309,7 +292,5 @@ app.get("/testViolation", (req, res) => {
 const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, () => {
-
  console.log("Server running on port", PORT);
-
 });
