@@ -10,7 +10,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// folders
 const DATA_FILE = "./data/violations.json";
 const UPLOAD_DIR = "./uploads";
 
@@ -18,11 +17,9 @@ if (!fs.existsSync("./data")) fs.mkdirSync("./data");
 if (!fs.existsSync("./uploads")) fs.mkdirSync("./uploads");
 if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, "[]");
 
-// static files
 app.use("/uploads", express.static(UPLOAD_DIR));
 app.use(express.static("public"));
 
-// upload setup
 const storage = multer.diskStorage({
  destination: function(req,file,cb){
   cb(null,UPLOAD_DIR);
@@ -34,7 +31,6 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// helper functions
 function readData(){
  return JSON.parse(fs.readFileSync(DATA_FILE));
 }
@@ -43,7 +39,7 @@ function saveData(data){
  fs.writeFileSync(DATA_FILE,JSON.stringify(data,null,2));
 }
 
-// scoring system
+// scoring
 function getScore(type){
 
  if(type==="seatbelt") return 1;
@@ -62,7 +58,7 @@ function getScore(type){
  return 1;
 }
 
-// fine system
+// fine
 function getFine(type){
 
  if(type==="seatbelt") return 500;
@@ -75,23 +71,44 @@ function getFine(type){
  if(type==="drowsyDriving") return 5000;
  if(type==="harshDriving") return 5000;
 
- if(type==="accident") return 0;
- if(type==="collision") return 0;
-
  return 500;
 }
 
-// home route
+// live clients for realtime updates
+let clients = [];
+
+app.get("/events",(req,res)=>{
+
+ res.set({
+  "Content-Type":"text/event-stream",
+  "Cache-Control":"no-cache",
+  "Connection":"keep-alive"
+ });
+
+ res.flushHeaders();
+
+ clients.push(res);
+
+ req.on("close",()=>{
+  clients = clients.filter(c => c !== res);
+ });
+
+});
+
+function broadcast(data){
+ clients.forEach(client=>{
+  client.write(`data: ${JSON.stringify(data)}\n\n`);
+ });
+}
+
 app.get("/",(req,res)=>{
  res.send("SAFEWAY Vehicle Blackbox Server Running");
 });
 
-// get logs
 app.get("/log",(req,res)=>{
  res.json(readData());
 });
 
-// add violation
 app.post("/violation",upload.single("image"),(req,res)=>{
 
  try{
@@ -126,6 +143,8 @@ app.post("/violation",upload.single("image"),(req,res)=>{
   violations.push(v);
   saveData(violations);
 
+  broadcast(v);
+
   res.json({
    success:true,
    violation:v
@@ -142,7 +161,6 @@ app.post("/violation",upload.single("image"),(req,res)=>{
 
 });
 
-// test route
 app.get("/testViolation",(req,res)=>{
 
  const violations = readData();
@@ -167,6 +185,8 @@ app.get("/testViolation",(req,res)=>{
 
  violations.push(v);
  saveData(violations);
+
+ broadcast(v);
 
  res.json({
   message:"Test violation added",
