@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ---------------- FOLDERS ----------------
+// ---------------- STORAGE ----------------
 
 const DATA_FILE = "./data/violations.json";
 const UPLOAD_DIR = "./uploads";
@@ -19,24 +19,19 @@ if (!fs.existsSync("./data")) fs.mkdirSync("./data");
 if (!fs.existsSync("./uploads")) fs.mkdirSync("./uploads");
 if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, "[]");
 
-// serve images
 app.use("/uploads", express.static(UPLOAD_DIR));
 app.use(express.static("public"));
 
 // ---------------- FILE UPLOAD ----------------
 
 const storage = multer.diskStorage({
- destination: function(req,file,cb){
-  cb(null,UPLOAD_DIR);
- },
- filename: function(req,file,cb){
-  cb(null,Date.now()+path.extname(file.originalname));
- }
+ destination: (req,file,cb)=> cb(null,UPLOAD_DIR),
+ filename: (req,file,cb)=> cb(null,Date.now()+path.extname(file.originalname))
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({ storage });
 
-// ---------------- DATA FUNCTIONS ----------------
+// ---------------- DATA HELPERS ----------------
 
 function readData(){
  return JSON.parse(fs.readFileSync(DATA_FILE));
@@ -46,41 +41,34 @@ function saveData(data){
  fs.writeFileSync(DATA_FILE,JSON.stringify(data,null,2));
 }
 
-// ---------------- SCORING SYSTEM ----------------
+// ---------------- VIOLATION RULES ----------------
+
+const rules = {
+
+ seatbelt: { score:1, fine:500 },
+ doorOpen: { score:1, fine:500 },
+
+ signalJump: { score:3, fine:1000 },
+ overspeed: { score:3, fine:1500 },
+ harshBraking: { score:3, fine:1000 },
+
+ alcoholLow: { score:4, fine:2000 },
+
+ alcoholHigh: { score:5, fine:10000 },
+ drowsyDriving: { score:5, fine:5000 },
+ harshDriving: { score:5, fine:5000 },
+
+ collision: { score:5, fine:0 },
+ accident: { score:5, fine:0 }
+
+};
 
 function getScore(type){
-
- if(type==="seatbelt") return 1;
- if(type==="doorOpen") return 1;
-
- if(type==="harshBraking") return 3;
- if(type==="alcoholLow") return 3;
-
- if(type==="alcoholHigh") return 5;
- if(type==="drowsyDriving") return 5;
- if(type==="harshDriving") return 5;
-
- if(type==="accident") return 5;
- if(type==="collision") return 5;
-
- return 1;
+ return rules[type]?.score || 1;
 }
 
-// ---------------- FINE SYSTEM ----------------
-
 function getFine(type){
-
- if(type==="seatbelt") return 500;
- if(type==="doorOpen") return 500;
-
- if(type==="harshBraking") return 1000;
- if(type==="alcoholLow") return 2000;
-
- if(type==="alcoholHigh") return 5000;
- if(type==="drowsyDriving") return 5000;
- if(type==="harshDriving") return 5000;
-
- return 500;
+ return rules[type]?.fine || 0;
 }
 
 // ---------------- REALTIME EVENTS ----------------
@@ -105,27 +93,48 @@ app.get("/events",(req,res)=>{
 
 });
 
-// broadcast update to dashboard
 function broadcast(data){
-
- clients.forEach(client=>{
-  client.write(`data: ${JSON.stringify(data)}\n\n`);
+ clients.forEach(c=>{
+  c.write(`data: ${JSON.stringify(data)}\n\n`);
  });
-
 }
 
-// ---------------- ROUTES ----------------
+// ---------------- ROOT ----------------
 
 app.get("/",(req,res)=>{
  res.send("SAFEWAY Vehicle Blackbox Server Running");
 });
 
-// return all violations
+// ---------------- GET LOG ----------------
+
 app.get("/log",(req,res)=>{
- res.json(readData());
+
+ const data = readData();
+
+ const now = Date.now();
+
+ // remove records older than 12 hours
+ const filtered = data.filter(v=>{
+  const diff = now - new Date(v.time).getTime();
+  return diff < 12 * 60 * 60 * 1000;
+ });
+
+ saveData(filtered);
+
+ res.json(filtered);
+
 });
 
-// ---------------- RECEIVE VIOLATION FROM ESP ----------------
+// ---------------- CAMERA STREAM INFO ----------------
+
+app.get("/camera",(req,res)=>{
+ res.json({
+  insideCam:"http://ESP_CAM_INSIDE_IP/stream",
+  outsideCam:"http://ESP_CAM_OUTSIDE_IP/stream"
+ });
+});
+
+// ---------------- ADD VIOLATION ----------------
 
 app.post("/violation",upload.single("image"),(req,res)=>{
 
@@ -134,40 +143,65 @@ app.post("/violation",upload.single("image"),(req,res)=>{
   const violations = readData();
 
   const type = req.body.type || "seatbelt";
+  const vehicleNo = req.body.vehicleNo || "KL07AB1234";
 
   const imagePath = req.file ? "/uploads/"+req.file.filename : "";
+
+  const score = getScore(type);
+  const fine = getFine(type);
+
+  const isEmergency = (type === "accident" || type === "collision");
 
   const v = {
 
    id: Date.now(),
 
-   vehicleNo: req.body.vehicleNo || "KL07AB1234",
+   vehicleNo,
+   ownerName:"Mark",
+   mobile:"+91 8520649127",
 
-   ownerName: "Mark",
-   mobile: "+91 8520649127",
+   violationType:type,
 
-   violationType: type,
+   score,
+   fine,
 
-   score: getScore(type),
-   fine: getFine(type),
+   emergency:isEmergency,
 
-   lat: req.body.lat || "",
-   lng: req.body.lng || "",
+   lat:req.body.lat || "",
+   lng:req.body.lng || "",
 
-   time: new Date().toLocaleString("en-IN",{
-    timeZone:"Asia/Kolkata"
-   }),
+   time:new Date().toLocaleString("en-IN",{timeZone:"Asia/Kolkata"}),
 
-   imageUrl: imagePath,
+   imageUrl:imagePath,
 
-   status: "pending"
+   status:"pending"
 
   };
 
   violations.push(v);
+
+  // ---------------- CHALLAN LOGIC ----------------
+
+  const vehicleViolations = violations.filter(
+   x => x.vehicleNo === vehicleNo && x.status === "pending"
+  );
+
+  const totalScore = vehicleViolations.reduce(
+   (sum,v)=> sum + v.score , 0
+  );
+
+  const challanExists = vehicleViolations.some(v => v.challan === true);
+
+  if(totalScore >= 5 && !challanExists){
+
+   vehicleViolations.forEach(v=>{
+    v.challan = true;
+   });
+
+  }
+
   saveData(violations);
 
-  // realtime dashboard update
   broadcast(v);
 
   res.json({
@@ -197,7 +231,6 @@ app.get("/testViolation",(req,res)=>{
   id: Date.now(),
 
   vehicleNo:"KL07AB1234",
-
   ownerName:"Mark",
   mobile:"+91 8520649127",
 
@@ -206,12 +239,12 @@ app.get("/testViolation",(req,res)=>{
   score:1,
   fine:500,
 
+  emergency:false,
+
   lat:"11.2588",
   lng:"75.7804",
 
-  time:new Date().toLocaleString("en-IN",{
-   timeZone:"Asia/Kolkata"
-  }),
+  time:new Date().toLocaleString("en-IN",{timeZone:"Asia/Kolkata"}),
 
   imageUrl:"",
 
@@ -220,6 +253,7 @@ app.get("/testViolation",(req,res)=>{
  };
 
  violations.push(v);
+
  saveData(violations);
 
  broadcast(v);
