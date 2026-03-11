@@ -10,6 +10,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// ---------------- FOLDERS ----------------
+
 const DATA_FILE = "./data/violations.json";
 const UPLOAD_DIR = "./uploads";
 
@@ -17,8 +19,11 @@ if (!fs.existsSync("./data")) fs.mkdirSync("./data");
 if (!fs.existsSync("./uploads")) fs.mkdirSync("./uploads");
 if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, "[]");
 
+// serve images
 app.use("/uploads", express.static(UPLOAD_DIR));
 app.use(express.static("public"));
+
+// ---------------- FILE UPLOAD ----------------
 
 const storage = multer.diskStorage({
  destination: function(req,file,cb){
@@ -31,6 +36,8 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
+// ---------------- DATA FUNCTIONS ----------------
+
 function readData(){
  return JSON.parse(fs.readFileSync(DATA_FILE));
 }
@@ -39,7 +46,8 @@ function saveData(data){
  fs.writeFileSync(DATA_FILE,JSON.stringify(data,null,2));
 }
 
-// scoring
+// ---------------- SCORING SYSTEM ----------------
+
 function getScore(type){
 
  if(type==="seatbelt") return 1;
@@ -58,7 +66,8 @@ function getScore(type){
  return 1;
 }
 
-// fine
+// ---------------- FINE SYSTEM ----------------
+
 function getFine(type){
 
  if(type==="seatbelt") return 500;
@@ -74,7 +83,8 @@ function getFine(type){
  return 500;
 }
 
-// live clients for realtime updates
+// ---------------- REALTIME EVENTS ----------------
+
 let clients = [];
 
 app.get("/events",(req,res)=>{
@@ -95,19 +105,27 @@ app.get("/events",(req,res)=>{
 
 });
 
+// broadcast update to dashboard
 function broadcast(data){
+
  clients.forEach(client=>{
   client.write(`data: ${JSON.stringify(data)}\n\n`);
  });
+
 }
+
+// ---------------- ROUTES ----------------
 
 app.get("/",(req,res)=>{
  res.send("SAFEWAY Vehicle Blackbox Server Running");
 });
 
+// return all violations
 app.get("/log",(req,res)=>{
  res.json(readData());
 });
+
+// ---------------- RECEIVE VIOLATION FROM ESP ----------------
 
 app.post("/violation",upload.single("image"),(req,res)=>{
 
@@ -122,18 +140,24 @@ app.post("/violation",upload.single("image"),(req,res)=>{
   const v = {
 
    id: Date.now(),
+
    vehicleNo: req.body.vehicleNo || "KL07AB1234",
-   ownerName: "Vehicle Owner",
-   mobile: "9999999999",
+
+   ownerName: "Mark",
+   mobile: "+91 8520649127",
 
    violationType: type,
+
    score: getScore(type),
    fine: getFine(type),
 
    lat: req.body.lat || "",
    lng: req.body.lng || "",
 
-   time: new Date(),
+   time: new Date().toLocaleString("en-IN",{
+    timeZone:"Asia/Kolkata"
+   }),
+
    imageUrl: imagePath,
 
    status: "pending"
@@ -143,6 +167,7 @@ app.post("/violation",upload.single("image"),(req,res)=>{
   violations.push(v);
   saveData(violations);
 
+  // realtime dashboard update
   broadcast(v);
 
   res.json({
@@ -161,6 +186,8 @@ app.post("/violation",upload.single("image"),(req,res)=>{
 
 });
 
+// ---------------- TEST VIOLATION ----------------
+
 app.get("/testViolation",(req,res)=>{
 
  const violations = readData();
@@ -168,15 +195,24 @@ app.get("/testViolation",(req,res)=>{
  const v = {
 
   id: Date.now(),
+
   vehicleNo:"KL07AB1234",
-  ownerName:"Test Owner",
-  mobile:"9999999999",
+
+  ownerName:"Mark",
+  mobile:"+91 8520649127",
 
   violationType:"seatbelt",
+
   score:1,
   fine:500,
 
-  time:new Date(),
+  lat:"11.2588",
+  lng:"75.7804",
+
+  time:new Date().toLocaleString("en-IN",{
+   timeZone:"Asia/Kolkata"
+  }),
+
   imageUrl:"",
 
   status:"pending"
@@ -194,6 +230,8 @@ app.get("/testViolation",(req,res)=>{
  });
 
 });
+
+// ---------------- SERVER ----------------
 
 const PORT = process.env.PORT || 3000;
 
