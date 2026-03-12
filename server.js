@@ -1,159 +1,59 @@
-const express = require("express");
-const multer = require("multer");
-const fs = require("fs");
-const path = require("path");
+Update the frontend dashboard of the Smart Vehicle Blackbox Monitoring System.
 
-const app = express();
+Backend API base URL:
+https://vehicle-blackbox-system-1.onrender.com
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+Endpoints:
+GET /log
+POST /violation
 
-/* SERVE PUBLIC FILES */
-app.use(express.static("public"));
+Requirements:
 
-/* SERVE UPLOADED IMAGES */
-app.use("/uploads", express.static("uploads"));
+1. Load violations from GET /log.
 
-/* STORAGE CONFIG */
-const storage = multer.diskStorage({
- destination: (req, file, cb) => {
-  cb(null, "uploads/");
- },
- filename: (req, file, cb) => {
-  const name = Date.now() + "-" + file.originalname;
-  cb(null, name);
- }
-});
+2. Each violation contains:
+   vehicleNo
+   violationType
+   score
+   fine
+   lat
+   lng
+   dateTime
+   imageUrl
 
-const upload = multer({ storage: storage });
+3. Display the following fields in the dashboard and challan:
 
-/* DATA FILE */
-const DATA_FILE = "data/violations.json";
+- Vehicle Number
+- Violation Type
+- Date and Time (dateTime)
+- Location (lat, lng)
+- Score
+- Fine
+- Evidence Image
 
-/* READ DATA */
-function readData() {
+4. For evidence images, use:
+   https://vehicle-blackbox-system-1.onrender.com + imageUrl
 
- if (!fs.existsSync(DATA_FILE)) {
-  fs.writeFileSync(DATA_FILE, "[]");
- }
+Example:
+<img src="https://vehicle-blackbox-system-1.onrender.com/uploads/file.jpg">
 
- const data = fs.readFileSync(DATA_FILE);
- return JSON.parse(data);
+5. If imageUrl is empty, display:
+   "No Evidence Image".
 
-}
+6. Ensure dashboard statistics calculate correctly:
+   Total Violations
+   Total Score
+   Total Fine
 
-/* SAVE DATA */
-function saveData(data) {
+7. Add automatic refresh every 3 seconds to reload violations from /log.
 
- fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+8. Fix challan layout:
 
-}
+- Show MVD logo at top
+- Show SafeDrive logo
+- Show violation evidence image
+- Show dateTime field
+- Show total fine correctly
 
-/* SCORE RULES */
-function getScore(type) {
-
- if (type === "seatbelt") return 1;
- if (type === "mobile") return 2;
- if (type === "overspeed") return 3;
-
- return 1;
-
-}
-
-/* FINE RULES */
-function getFine(type) {
-
- if (type === "seatbelt") return 500;
- if (type === "mobile") return 1000;
- if (type === "overspeed") return 1500;
-
- return 500;
-
-}
-
-/* VIOLATION API */
-app.post("/violation", upload.single("image"), (req, res) => {
-
- try {
-
-  const violations = readData();
-
-  const type = req.body.type || "seatbelt";
-  const vehicleNo = req.body.vehicleNo || "KL59AB1234";
-
-  let imagePath = "";
-
-  if (req.file) {
-   imagePath = "/uploads/" + req.file.filename;
-  }
-
-  const score = getScore(type);
-  const fine = getFine(type);
-
-  const violation = {
-
-   id: Date.now(),
-
-   vehicleNo: vehicleNo,
-
-   ownerName: "Mark",
-   mobile: "+91 8520649127",
-
-   violationType: type,
-
-   score: score,
-   fine: fine,
-
-   emergency: false,
-
-   lat: req.body.lat || "10.8505",
-   lng: req.body.lng || "76.2711",
-
-   dateTime: new Date().toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata"
-   }),
-
-   imageUrl: imagePath,
-
-   status: "pending"
-
-  };
-
-  violations.push(violation);
-
-  saveData(violations);
-
-  res.json({
-   success: true,
-   violation: violation
-  });
-
- } catch (err) {
-
-  console.log(err);
-
-  res.status(500).json({
-   error: err.message
-  });
-
- }
-
-});
-
-/* GET ALL VIOLATIONS */
-app.get("/log", (req, res) => {
-
- const data = readData();
-
- res.json(data);
-
-});
-
-/* SERVER START */
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-
- console.log("Server running on port " + PORT);
-
-});
+Goal:
+Dashboard must display violations, evidence images, and timestamps correctly using the backend data.
