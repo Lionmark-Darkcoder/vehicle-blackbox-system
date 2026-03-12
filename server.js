@@ -231,7 +231,7 @@ app.get("/testViolation",(req,res)=>{
 
   id: Date.now(),
 
-  vehicleNo:"KL07AB1234",
+  vehicleNo:"KL59AB1234",
   ownerName:"Mark",
   mobile:"+91 8520649127",
 
