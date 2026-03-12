@@ -137,7 +137,8 @@ app.get("/camera",(req,res)=>{
 // ---------------- ADD VIOLATION ----------------
 
 app.post("/violation",upload.single("image"),(req,res)=>{
-
+console.log("FILE:", req.file);
+console.log("BODY:", req.body);
  try{
 
   const violations = readData();
