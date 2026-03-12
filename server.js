@@ -40,13 +40,76 @@ app.get("/log",(req,res)=>{
 });
 
 // ADD VIOLATION
-app.post("/violation",(req,res)=>{
+// ---------------- ADD VIOLATION ----------------
 
- const chunks=[];
+app.post("/violation", upload.single("image"), (req,res)=>{
 
- req.on("data",(chunk)=>{
-  chunks.push(chunk);
- });
+ try{
+
+  console.log("FILE:",req.file);
+  console.log("BODY:",req.body);
+
+  const violations = readData();
+
+  const type = req.body.type || "seatbelt";
+  const vehicleNo = req.body.vehicleNo || "KL59AB1234";
+
+  let imagePath = "";
+
+  if(req.file){
+    imagePath = "/uploads/" + req.file.filename;
+  }
+
+  const score = getScore(type);
+  const fine = getFine(type);
+
+  const v = {
+
+   id: Date.now(),
+
+   vehicleNo,
+   ownerName:"Mark",
+   mobile:"+91 8520649127",
+
+   violationType:type,
+
+   score,
+   fine,
+
+   emergency:false,
+
+   lat:req.body.lat || "",
+   lng:req.body.lng || "",
+
+   time:new Date().toLocaleString("en-IN",{timeZone:"Asia/Kolkata"}),
+
+   imageUrl:imagePath,
+
+   status:"pending"
+
+  };
+
+  violations.push(v);
+
+  saveData(violations);
+
+  broadcast(v);
+
+  res.json({
+   success:true,
+   violation:v
+  });
+
+ }
+ catch(err){
+
+  res.status(500).json({
+   error:err.message
+  });
+
+ }
+
+});
 
  req.on("end",()=>{
 
