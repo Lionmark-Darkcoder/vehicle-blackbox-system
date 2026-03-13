@@ -7,42 +7,39 @@ const cors = require("cors");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* -------------------- CONFIG -------------------- */
-
-const VEHICLE_NO = "KL59AB1234";
-
-const DATA_DIR = path.join(__dirname, "data");
-const DATA_FILE = path.join(DATA_DIR, "violations.json");
-
-const UPLOAD_DIR = path.join(__dirname, "uploads");
-const CHALLAN_DIR = path.join(__dirname, "challans");
-
-/* -------------------- MIDDLEWARE -------------------- */
+/* ---------------- MIDDLEWARE ---------------- */
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+/* serve frontend */
 app.use(express.static("public"));
-app.use("/uploads", express.static(UPLOAD_DIR));
 
-/* -------------------- ENSURE FOLDERS -------------------- */
+/* serve uploaded images */
+app.use("/uploads", express.static("uploads"));
 
-function ensureFolder(folder) {
-  if (!fs.existsSync(folder)) {
-    fs.mkdirSync(folder, { recursive: true });
-  }
-}
+/* ---------------- FILE PATHS ---------------- */
 
-ensureFolder(DATA_DIR);
-ensureFolder(UPLOAD_DIR);
-ensureFolder(CHALLAN_DIR);
+const DATA_FILE = path.join(__dirname, "data", "violations.json");
+const UPLOAD_DIR = path.join(__dirname, "uploads");
+const CHALLAN_DIR = path.join(__dirname, "challans");
+
+/* ---------------- VEHICLE ---------------- */
+
+const VEHICLE_NO = "KL59AB1234";
+
+/* ---------------- STARTUP CHECKS ---------------- */
+
+if (!fs.existsSync("data")) fs.mkdirSync("data");
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
+if (!fs.existsSync(CHALLAN_DIR)) fs.mkdirSync(CHALLAN_DIR);
 
 if (!fs.existsSync(DATA_FILE)) {
   fs.writeFileSync(DATA_FILE, "[]");
 }
 
-/* -------------------- FILE UPLOAD -------------------- */
+/* ---------------- MULTER ---------------- */
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -51,132 +48,134 @@ const storage = multer.diskStorage({
   filename: function (req, file, cb) {
     const name = Date.now() + "_" + file.originalname;
     cb(null, name);
-  },
+  }
 });
 
 const upload = multer({ storage: storage });
 
-/* -------------------- UTIL FUNCTIONS -------------------- */
-
-function readViolations() {
-  return JSON.parse(fs.readFileSync(DATA_FILE));
-}
-
-function writeViolations(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
+/* ---------------- TIME ---------------- */
 
 function getTime() {
   const now = new Date();
 
-  const date = now.toLocaleDateString("en-GB");
-  const time = now.toLocaleTimeString("en-GB");
-
-  return `${date} | ${time}`;
+  return now.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
 }
 
-/* -------------------- POST /violation -------------------- */
+/* ---------------- FILE HANDLING ---------------- */
+
+function readData() {
+  return JSON.parse(fs.readFileSync(DATA_FILE));
+}
+
+function writeData(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+/* ---------------- POST VIOLATION ---------------- */
 
 app.post("/violation", upload.single("image"), (req, res) => {
-  try {
-    const violations = readViolations();
 
-    const type = req.body.type || "Unknown Violation";
+  let violations = readData();
 
-    const evidence = req.file ? req.file.filename : null;
+  const type = req.body.type || "Unknown Violation";
 
-    const score = violations.length + 1;
+  const evidence = req.file ? req.file.filename : null;
 
-    const record = {
+  const score = violations.length + 1;
+
+  const violation = {
+    vehicle: VEHICLE_NO,
+    type: type,
+    score: score,
+    time: getTime(),
+    evidence: evidence
+  };
+
+  violations.push(violation);
+  writeData(violations);
+
+  console.log("Violation Logged:", violation);
+
+  /* -------- MULTIPLE VIOLATION -------- */
+
+  if (score >= 5) {
+
+    const challan = {
       vehicle: VEHICLE_NO,
-      type: type,
-      score: score,
-      time: getTime(),
-      evidence: evidence,
+      authority: "MVD",
+      system: "SafeDrive",
+      totalScore: score,
+      lastViolation: type,
+      date: getTime(),
+      evidence: evidence
     };
 
-    violations.push(record);
+    const challanFile = "challan_" + Date.now() + ".json";
 
-    writeViolations(violations);
+    fs.writeFileSync(
+      path.join(CHALLAN_DIR, challanFile),
+      JSON.stringify(challan, null, 2)
+    );
 
-    console.log("Violation Logged:", record);
-
-    /* ---------- Challan Generation ---------- */
-
-    if (score >= 5) {
-      const challan = {
-        vehicle: VEHICLE_NO,
-        authority: "MVD",
-        system: "SafeDrive",
-        totalScore: score,
-        lastViolation: type,
-        date: getTime(),
-        evidence: evidence,
-      };
-
-      const fileName = "challan_" + Date.now() + ".json";
-
-      fs.writeFileSync(
-        path.join(CHALLAN_DIR, fileName),
-        JSON.stringify(challan, null, 2)
-      );
-
-      return res.json({
-        status: "Violation logged and challan generated",
-        score: score,
-        popup: true,
-      });
-    }
-
-    res.json({
-      status: "Violation logged",
+    return res.json({
+      status: "Violation logged and challan generated",
       score: score,
-      popup: false,
+      popup: true
     });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Server error" });
+
   }
+
+  res.json({
+    status: "Violation logged",
+    score: score,
+    popup: false
+  });
+
 });
 
-/* -------------------- GET ENDPOINTS -------------------- */
+/* ---------------- GET ALL VIOLATIONS ---------------- */
 
 app.get("/violations", (req, res) => {
-  res.json(readViolations());
+
+  res.json(readData());
+
 });
 
-/* Alias endpoint used by some frontend versions */
-
-app.get("/log", (req, res) => {
-  res.json(readViolations());
-});
-
-/* Score endpoint */
+/* ---------------- GET SCORE ---------------- */
 
 app.get("/score", (req, res) => {
-  const data = readViolations();
-  res.json({ score: data.length });
+
+  const data = readData();
+
+  res.json({
+    score: data.length
+  });
+
 });
 
-/* Camera stream endpoint */
+/* ---------------- CAMERA STREAM URL ---------------- */
 
 app.get("/stream", (req, res) => {
+
   res.json({
-    stream: "http://ESP_CAMERA_IP:81/stream",
+    inside: "http://INSIDE_CAMERA_IP/stream",
+    outside: "http://OUTSIDE_CAMERA_IP/stream"
   });
+
 });
 
-/* Health check for uptime monitoring */
-
-app.get("/health", (req, res) => {
-  res.json({
-    status: "Server running",
-    time: new Date(),
-  });
-});
-
-/* -------------------- START SERVER -------------------- */
+/* ---------------- SERVER START ---------------- */
 
 app.listen(PORT, () => {
-  console.log("SafeDrive Server Running on Port:", PORT);
+
+  console.log("SafeDrive Server Running on Port", PORT);
+
 });
