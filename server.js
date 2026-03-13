@@ -1,180 +1,204 @@
-const express = require("express");
-const cors = require("cors");
-const multer = require("multer");
-const fs = require("fs");
-const path = require("path");
+const express = require('express');
+const multer = require('multer');
+const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// --- DIRECTORY & FILE PATHS ---
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const DATA_DIR = path.join(__dirname, 'data');
+const DB_FILE = path.join(DATA_DIR, 'violations.json');
+
+// --- INITIALIZE SYSTEM DIRECTORIES ---
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+/**
+
+Safe JSON initialization and corruption recovery
+*/
+const initializeDB = () => {
+try {
+if (!fs.existsSync(DB_FILE)) {
+fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
+} else {
+const content = fs.readFileSync(DB_FILE, 'utf8');
+JSON.parse(content || '[]');
+}
+} catch (e) {
+console.error("[ERROR] DB Corrupted. Resetting violations.json");
+fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
+}
+};
+initializeDB();
+
+
+// --- MIDDLEWARE ---
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cors());
-app.use(express.json());
+app.use('/uploads', express.static(UPLOADS_DIR));
 
-/* -----------------------------
-   Ensure folders exist
------------------------------ */
+// Improved Request Logging
+app.use((req, res, next) => {
+const timestamp = new Date().toISOString();
+console.log([${timestamp}] ${req.method} ${req.url} from ${req.ip});
+next();
+});
 
-if (!fs.existsSync("./uploads")) {
-  fs.mkdirSync("./uploads");
-}
-
-if (!fs.existsSync("./data")) {
-  fs.mkdirSync("./data");
-}
-
-/* -----------------------------
-   Serve uploaded images
------------------------------ */
-
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-/* -----------------------------
-   Multer config
------------------------------ */
-
+// --- MULTER CONFIGURATION (SECURITY IMPROVED) ---
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/");
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + "_evidence.jpg");
-  }
+destination: (req, file, cb) => cb(null, 'uploads/'),
+filename: (req, file, cb) => {
+const timestamp = Date.now();
+cb(null, ${timestamp}_evidence.jpg);
+}
 });
 
-const upload = multer({ storage: storage });
-
-/* -----------------------------
-   Data file
------------------------------ */
-
-const DATA_FILE = "./data/violations.json";
-
-if (!fs.existsSync(DATA_FILE)) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify([]));
+const fileFilter = (req, file, cb) => {
+if (file.mimetype.startsWith("image/")) {
+cb(null, true);
+} else {
+cb(new Error("Only image files are allowed!"), false);
 }
-
-function readData() {
-  return JSON.parse(fs.readFileSync(DATA_FILE));
-}
-
-function writeData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-/* -----------------------------
-   Fine rules
------------------------------ */
-
-const fines = {
-  "Seatbelt Violation": 500,
-  "Alcohol Violation": 500,
-  "Drowsiness": 500,
-  "Harsh Braking": 1000,
-  "Harsh Driving": 1000
 };
 
-/* -----------------------------
-   GPS location for accident
------------------------------ */
+const upload = multer({
+storage: storage,
+fileFilter: fileFilter,
+limits: { fileSize: 10 * 1024 * 1024 } // 10MB Limit
+});
 
-const accidentLocation = {
-  lat: 12.0978888,
-  lng: 75.5605588
+// --- HELPER FUNCTIONS ---
+const getViolations = () => {
+try {
+const data = fs.readFileSync(DB_FILE, 'utf8');
+return JSON.parse(data || '[]');
+} catch (e) {
+return [];
+}
 };
 
-/* -----------------------------
-   POST VIOLATION
------------------------------ */
+const saveViolation = (record) => {
+const records = getViolations();
+records.push(record);
+fs.writeFileSync(DB_FILE, JSON.stringify(records, null, 2));
+};
 
-app.post("/violation", upload.single("image"), (req, res) => {
+// --- API ENDPOINTS ---
 
-  let violations = readData();
+/**
 
-  const type = req.body.type || "Unknown";
-
-  const imagePath = req.file
-    ? `/uploads/${req.file.filename}`
-    : null;
-
-  const now = new Date().toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata"
-  });
-
-  /* -----------------------------
-     Accident / Collision
-  ----------------------------- */
-
-  if (type === "Accident" || type === "Collision") {
-
-    const event = {
-      vehicleNo: "KL59AB1234",
-      violationType: type,
-      fine: 0,
-      score: 0,
-      lat: accidentLocation.lat,
-      lng: accidentLocation.lng,
-      dateTime: now,
-      imageUrl: imagePath
-    };
-
-    violations.push(event);
-    writeData(violations);
-
-    return res.json({
-      status: "emergency_logged",
-      data: event
-    });
-  }
-
-  /* -----------------------------
-     Normal violation
-  ----------------------------- */
-
-  const fine = fines[type] || 0;
-
-  const violation = {
-    vehicleNo: "KL59AB1234",
-    violationType: type,
-    fine: fine,
-    score: violations.length + 1,
-    lat: null,
-    lng: null,
-    dateTime: now,
-    imageUrl: imagePath
-  };
-
-  violations.push(violation);
-
-  writeData(violations);
-
-  res.json({
-    status: "violation_logged",
-    data: violation
-  });
-
+@route   GET /health
+*/
+app.get('/health', (req, res) => {
+res.status(200).json({ status: "ok", service: "SafeDrive Backend" });
 });
 
-/* -----------------------------
-   GET violations
------------------------------ */
 
-app.get("/violations", (req, res) => {
-  res.json(readData());
+/**
+
+@route   POST /violation
+
+@desc    Receives multipart data from ESP32-CAM
+*/
+app.post('/violation', upload.single('image'), (req, res) => {
+try {
+if (!req.file) {
+return res.status(400).json({ error: "No valid image evidence provided" });
+}
+
+const { type } = req.body;  
+ const violationType = type || "Unknown Violation";  
+ const istDateTime = new Date().toLocaleString("en-IN", {   
+     timeZone: "Asia/Kolkata",  
+     hour12: false   
+ }).replace(/-/g, '/');  
+
+ // Dynamic Full URL Generation  
+ const fullImageUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;  
+
+ let fine = 0;  
+ let score = 0;  
+ let lat = null;  
+ let lng = null;  
+
+ // Logic for Accident/Collision vs Normal Violations  
+ if (violationType === "Accident" || violationType === "Collision") {  
+     fine = 0;  
+     score = 0;  
+     lat = 12.0978888;  
+     lng = 75.5605588;  
+ } else {  
+     const fineRules = {  
+         "Seatbelt Violation": 500,  
+         "Alcohol Violation": 500,  
+         "Drowsiness": 500,  
+         "Harsh Braking": 1000,  
+         "Harsh Driving": 1000  
+     };  
+     fine = fineRules[violationType] || 0;  
+     score = 1;  
+ }  
+
+ const newRecord = {  
+     vehicleNo: "KL59AB1234",  
+     violationType,  
+     fine,  
+     score,  
+     lat,  
+     lng,  
+     dateTime: istDateTime,  
+     imageUrl: fullImageUrl  
+ };  
+
+ saveViolation(newRecord);  
+ res.status(201).json({ success: true, record: newRecord });
+
+} catch (error) {
+console.error("[ERROR]", error.message);
+res.status(500).json({ error: error.message });
+}
 });
 
-/* -----------------------------
-   Score endpoint
------------------------------ */
 
-app.get("/score", (req, res) => {
-  const data = readData();
-  res.json({ score: data.length });
+/**
+
+@route   GET /violations
+*/
+app.get('/violations', (req, res) => {
+res.json(getViolations());
 });
 
-/* -----------------------------
-   Start server
------------------------------ */
 
+/**
+
+@route   GET /score
+*/
+app.get('/score', (req, res) => {
+const records = getViolations();
+const totalScore = records.reduce((sum, r) => sum + (r.score || 0), 0);
+res.json({ totalScore });
+});
+
+
+// --- GLOBAL ERROR HANDLER ---
+app.use((err, req, res, next) => {
+if (err instanceof multer.MulterError) {
+return res.status(400).json({ error: Multer Error: ${err.message} });
+}
+res.status(500).json({ error: err.message });
+});
+
+// --- START SERVER ---
 app.listen(PORT, () => {
-  console.log("SafeDrive Server Running on port", PORT);
+console.log(\n================================================);
+console.log(SafeDrive Backend running on port ${PORT});
+console.log(Uploads directory: ${UPLOADS_DIR});
+console.log(Database file: ${DB_FILE});
+console.log(Example URL: http://localhost:${PORT}/uploads/sample.jpg);
+console.log(================================================\n);
 });
