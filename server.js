@@ -1,8 +1,3 @@
-/**
- * SafeDrive Smart Vehicle Blackbox Monitoring System
- * Backend Server for ESP32-CAM Evidence Logging
- */
-
 const express = require("express");
 const multer = require("multer");
 const cors = require("cors");
@@ -12,36 +7,32 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* ---------------- CONFIGURATION ---------------- */
+/* ---------------- CONFIG ---------------- */
 
 const VEHICLE_NO = "KL59AB1234";
+
 const ACCIDENT_LAT = 12.0978888;
 const ACCIDENT_LNG = 75.5605588;
 
-const UPLOADS_DIR = path.join(__dirname, "uploads");
-const DATA_DIR = path.join(__dirname, "data");
-const DB_FILE = path.join(DATA_DIR, "violations.json");
+const UPLOAD_DIR = path.join(__dirname, "uploads");
+const DATA_FILE = path.join(__dirname, "violations.json");
 
-/* ---------------- INITIALIZE FOLDERS ---------------- */
+/* ---------------- INITIAL SETUP ---------------- */
 
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-if (!fs.existsSync(DB_FILE)) {
-  fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
+if (!fs.existsSync(DATA_FILE)) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify([], null, 2));
 }
 
 /* ---------------- MIDDLEWARE ---------------- */
 
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors());
-app.use("/uploads", express.static(UPLOADS_DIR));
+app.use("/uploads", express.static(UPLOAD_DIR));
 
 /* ---------------- REQUEST LOGGER ---------------- */
 
@@ -50,38 +41,54 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ---------------- MULTER CONFIG ---------------- */
+/* ---------------- MULTER STORAGE ---------------- */
 
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, UPLOADS_DIR);
+  destination: (req, file, cb) => {
+    cb(null, UPLOAD_DIR);
   },
-  filename: function (req, file, cb) {
-    const timestamp = Date.now();
-    cb(null, `${timestamp}_evidence.jpg`);
-  },
+  filename: (req, file, cb) => {
+    const filename = Date.now() + "_evidence.jpg";
+    cb(null, filename);
+  }
 });
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-  fileFilter: function (req, file, cb) {
-    if (file.mimetype.startsWith("image/")) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only image files allowed"));
-    }
-  },
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) cb(null, true);
+    else cb(new Error("Only image files allowed"));
+  }
 });
 
-/* ---------------- JSON DATABASE FUNCTIONS ---------------- */
+/* ---------------- SCORING SYSTEM ---------------- */
+
+const scoreRules = {
+  "Seatbelt Violation": 1,
+  "Alcohol Violation": 2,
+  "Drowsiness": 2,
+  "Door Open While Driving": 2,
+  "Harsh Braking": 3,
+  "Harsh Driving": 3
+};
+
+const fineRules = {
+  "Seatbelt Violation": 500,
+  "Alcohol Violation": 500,
+  "Drowsiness": 500,
+  "Door Open While Driving": 500,
+  "Harsh Braking": 1000,
+  "Harsh Driving": 1000
+};
+
+/* ---------------- DATABASE FUNCTIONS ---------------- */
 
 function readViolations() {
   try {
-    const data = fs.readFileSync(DB_FILE, "utf8");
-    return JSON.parse(data || "[]");
-  } catch (err) {
-    console.error("JSON Read Error:", err);
+    const data = fs.readFileSync(DATA_FILE);
+    return JSON.parse(data);
+  } catch {
     return [];
   }
 }
@@ -89,7 +96,7 @@ function readViolations() {
 function saveViolation(record) {
   const logs = readViolations();
   logs.push(record);
-  fs.writeFileSync(DB_FILE, JSON.stringify(logs, null, 2));
+  fs.writeFileSync(DATA_FILE, JSON.stringify(logs, null, 2));
 }
 
 /* ---------------- HEALTH CHECK ---------------- */
@@ -101,49 +108,53 @@ app.get("/health", (req, res) => {
 /* ---------------- RECEIVE VIOLATION ---------------- */
 
 app.post("/violation", upload.single("image"), (req, res) => {
+
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "Image evidence missing" });
+
+    const type = req.body.type;
+    const camera = req.body.camera;
+
+    if (!type) {
+      return res.status(400).json({ error: "Violation type missing" });
     }
 
-    const type = req.body.type || "Unknown";
+    if (!camera || !["INSIDE_CAMERA", "OUTSIDE_CAMERA"].includes(camera)) {
+      return res.status(400).json({ error: "Invalid camera source" });
+    }
 
-    let fine = 0;
     let score = 0;
+    let fine = 0;
     let lat = null;
     let lng = null;
 
-    const fineRules = {
-      "Seatbelt Violation": 500,
-      "Alcohol Violation": 500,
-      "Drowsiness": 500,
-      "Harsh Braking": 1000,
-      "Harsh Driving": 1000,
-    };
+    const isIncident = type === "Accident" || type === "Collision";
 
-    if (type === "Accident" || type === "Collision") {
-      fine = 0;
+    if (isIncident) {
       score = 0;
+      fine = 0;
       lat = ACCIDENT_LAT;
       lng = ACCIDENT_LNG;
     } else {
+      score = scoreRules[type] || 0;
       fine = fineRules[type] || 0;
-      score = 1;
     }
 
-    const imageUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+    const imageUrl = req.file
+      ? `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`
+      : null;
 
     const record = {
       vehicleNo: VEHICLE_NO,
+      cameraSource: camera,
       violationType: type,
-      fine: fine,
       score: score,
+      fine: fine,
       lat: lat,
       lng: lng,
       dateTime: new Date().toLocaleString("en-IN", {
-        timeZone: "Asia/Kolkata",
+        timeZone: "Asia/Kolkata"
       }),
-      imageUrl: imageUrl,
+      imageUrl: imageUrl
     };
 
     saveViolation(record);
@@ -152,15 +163,16 @@ app.post("/violation", upload.single("image"), (req, res) => {
 
     res.status(201).json({
       success: true,
-      record: record,
+      record: record
     });
+
   } catch (error) {
-    console.error("Upload Error:", error);
-    res.status(500).json({ error: "Server error" });
+    console.error("Server Error:", error);
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
-/* ---------------- FETCH ALL LOGS ---------------- */
+/* ---------------- FETCH ALL VIOLATIONS ---------------- */
 
 app.get("/violations", (req, res) => {
   const data = readViolations();
@@ -175,10 +187,10 @@ app.get("/score", (req, res) => {
   res.json({ totalScore });
 });
 
-/* ---------------- ERROR HANDLER ---------------- */
+/* ---------------- GLOBAL ERROR HANDLER ---------------- */
 
 app.use((err, req, res, next) => {
-  console.error("Server Error:", err.message);
+  console.error(err.message);
 
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ error: err.message });
@@ -190,11 +202,12 @@ app.use((err, req, res, next) => {
 /* ---------------- START SERVER ---------------- */
 
 app.listen(PORT, () => {
-  console.log("=====================================");
+
+  console.log("=================================");
   console.log("SafeDrive Backend Server Running");
-  console.log("PORT:", PORT);
-  console.log("Uploads:", UPLOADS_DIR);
-  console.log("Database:", DB_FILE);
-  console.log("Health check: /health");
-  console.log("=====================================");
+  console.log("Port:", PORT);
+  console.log("Uploads:", UPLOAD_DIR);
+  console.log("Database:", DATA_FILE);
+  console.log("=================================");
+
 });
