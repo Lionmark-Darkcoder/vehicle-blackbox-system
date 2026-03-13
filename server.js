@@ -1,230 +1,131 @@
 const express = require("express");
-const fs = require("fs");
-const path = require("path");
-const multer = require("multer");
 const cors = require("cors");
+const multer = require("multer");
+const path = require("path");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-/* ------------------ MIDDLEWARE ------------------ */
+const PORT = 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.static("public"));
 
-/* ------------------ FOLDERS ------------------ */
+/* SERVE UPLOADED IMAGES */
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-const DATA_DIR = path.join(__dirname, "data");
-const DATA_FILE = path.join(DATA_DIR, "violations.json");
-const UPLOAD_DIR = path.join(__dirname, "uploads");
-const CHALLAN_DIR = path.join(__dirname, "challans");
-
-/* ensure folders exist */
-
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
-if (!fs.existsSync(CHALLAN_DIR)) fs.mkdirSync(CHALLAN_DIR);
-if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, "[]");
-
-/* ------------------ FILE STORAGE ------------------ */
-
+/* MULTER STORAGE */
 const storage = multer.diskStorage({
-destination: function (req, file, cb) {
-cb(null, UPLOAD_DIR);
-},
-filename: function (req, file, cb) {
-cb(null, Date.now() + "_" + file.originalname);
-}
+  destination: function (req, file, cb) {
+    cb(null, "uploads/");
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + "_evidence.jpg");
+  }
 });
 
 const upload = multer({ storage: storage });
 
-/* ------------------ VEHICLE INFO ------------------ */
+/* DATABASE (IN MEMORY) */
+let violations = [];
+let emergencies = [];
 
-const VEHICLE_NO = "KL59AB1234";
-
-/* ------------------ CAMERA IP ------------------ */
-
-let cameraIP = "";
-
-/* ------------------ FINE TABLE ------------------ */
-
+/* FINE TABLE */
 const fines = {
-Seatbelt: 500,
-Alcohol: 2000,
-Drowsiness: 1000,
-"Harsh Brake": 500,
-"Harsh Driving": 1000,
-Collision: 3000,
-Accident: 5000
+  "Seatbelt Violation": 500,
+  "Alcohol Violation": 500,
+  "Drowsiness": 500,
+  "Harsh Braking": 1000,
+  "Harsh Driving": 1000
 };
 
-/* ------------------ UTIL FUNCTIONS ------------------ */
+/* SCORE TABLE */
+const scores = {
+  "Seatbelt Violation": 2,
+  "Alcohol Violation": 1,
+  "Drowsiness": 1,
+  "Harsh Braking": 2,
+  "Harsh Driving": 2
+};
 
-function getTime() {
+/* GPS LOCATION */
+const accidentLocation = {
+  latitude: 12.0978888,
+  longitude: 75.5605588
+};
 
-return new Date().toLocaleString("en-IN", {
-timeZone: "Asia/Kolkata",
-year: "numeric",
-month: "2-digit",
-day: "2-digit",
-hour: "2-digit",
-minute: "2-digit",
-second: "2-digit"
-});
-
-}
-
-function readData() {
-
-return JSON.parse(fs.readFileSync(DATA_FILE));
-
-}
-
-function writeData(data) {
-
-fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-
-}
-
-/* ------------------ CAMERA IP UPDATE ------------------ */
-
-app.post("/camera-ip", (req, res) => {
-
-cameraIP = req.body.ip;
-
-console.log("Camera IP updated:", cameraIP);
-
-res.json({
-status: "camera ip stored",
-ip: cameraIP
-});
-
-});
-
-/* ------------------ STREAM ENDPOINT ------------------ */
-
-app.get("/stream", (req, res) => {
-
-if (!cameraIP) {
-
-return res.json({
-stream: null,
-status: "camera offline"
-});
-
-}
-
-res.json({
-stream: `http://${cameraIP}/stream`
-});
-
-});
-
-/* ------------------ VIOLATION API ------------------ */
-
+/* VIOLATION ENDPOINT */
 app.post("/violation", upload.single("image"), (req, res) => {
 
-let violations = readData();
+  const type = req.body.type || "Unknown";
 
-const type = req.body.type || "Unknown";
-const evidence = req.file ? req.file.filename : null;
+  const imagePath = req.file
+    ? "/uploads/" + req.file.filename
+    : null;
 
-const score = violations.length + 1;
+  const now = new Date();
 
-const fine = fines[type] || 500;
+  /* ACCIDENT OR COLLISION → EMERGENCY EVENT */
+  if (type === "Accident" || type === "Collision") {
 
-const violation = {
+    const emergency = {
+      id: Date.now(),
+      type: type,
+      vehicle: "KL59AB1234",
+      owner: "Mark",
+      phone: "+91 8520649127",
+      time: now.toLocaleString(),
+      location: accidentLocation,
+      camera: "Outside Cam",
+      image: imagePath
+    };
 
-vehicle: VEHICLE_NO,
-type: type,
-score: score,
-fine: fine,
-time: getTime(),
-evidence: evidence
+    emergencies.push(emergency);
 
-};
+    console.log("Emergency Event:", emergency);
 
-violations.push(violation);
+    return res.json({
+      status: "emergency_logged",
+      event: emergency
+    });
+  }
 
-writeData(violations);
+  /* NORMAL VIOLATIONS */
+  const violation = {
+    id: Date.now(),
+    type: type,
+    fine: fines[type] || 0,
+    score: scores[type] || 0,
+    time: now.toLocaleString(),
+    image: imagePath,
+    camera: "Outside Cam",
+    vehicle: "KL59AB1234"
+  };
 
-console.log("Violation Logged:", violation);
+  violations.push(violation);
 
-/* -------- CHALLAN GENERATION -------- */
+  console.log("Violation logged:", violation);
 
-if (score >= 5) {
-
-const challan = {
-
-vehicle: VEHICLE_NO,
-authority: "MVD",
-system: "SafeDrive",
-totalScore: score,
-lastViolation: type,
-fine: fine,
-time: getTime(),
-evidence: evidence
-
-};
-
-const file = "challan_" + Date.now() + ".json";
-
-fs.writeFileSync(
-
-path.join(CHALLAN_DIR, file),
-JSON.stringify(challan, null, 2)
-
-);
-
-return res.json({
-
-status: "Violation logged and challan generated",
-score: score,
-fine: fine,
-popup: true
+  res.json({
+    status: "violation_logged",
+    violation: violation
+  });
 
 });
 
-}
-
-/* normal response */
-
-res.json({
-
-status: "Violation logged",
-score: score,
-fine: fine,
-popup: false
-
-});
-
-});
-
-/* ------------------ GET VIOLATIONS ------------------ */
-
+/* GET VIOLATIONS */
 app.get("/violations", (req, res) => {
-
-res.json(readData());
-
+  res.json(violations);
 });
 
-/* ------------------ SCORE API ------------------ */
-
-app.get("/score", (req, res) => {
-
-res.json({
-score: readData().length
+/* GET EMERGENCY EVENTS */
+app.get("/emergencies", (req, res) => {
+  res.json(emergencies);
 });
 
+/* ROOT */
+app.get("/", (req, res) => {
+  res.send("SAFEWAY Vehicle Blackbox Server Running");
 });
-
-/* ------------------ SERVER START ------------------ */
 
 app.listen(PORT, () => {
-
-console.log("SafeDrive server running on port", PORT);
-
+  console.log("Server running on port", PORT);
 });
