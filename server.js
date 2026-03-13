@@ -1,18 +1,37 @@
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
+const fs = require("fs");
 const path = require("path");
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-/* SERVE UPLOADED IMAGES */
+/* -----------------------------
+   Ensure folders exist
+----------------------------- */
+
+if (!fs.existsSync("./uploads")) {
+  fs.mkdirSync("./uploads");
+}
+
+if (!fs.existsSync("./data")) {
+  fs.mkdirSync("./data");
+}
+
+/* -----------------------------
+   Serve uploaded images
+----------------------------- */
+
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-/* MULTER STORAGE */
+/* -----------------------------
+   Multer config
+----------------------------- */
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, "uploads/");
@@ -24,11 +43,28 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-/* DATABASE (IN MEMORY) */
-let violations = [];
-let emergencies = [];
+/* -----------------------------
+   Data file
+----------------------------- */
 
-/* FINE TABLE */
+const DATA_FILE = "./data/violations.json";
+
+if (!fs.existsSync(DATA_FILE)) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify([]));
+}
+
+function readData() {
+  return JSON.parse(fs.readFileSync(DATA_FILE));
+}
+
+function writeData(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+/* -----------------------------
+   Fine rules
+----------------------------- */
+
 const fines = {
   "Seatbelt Violation": 500,
   "Alcohol Violation": 500,
@@ -37,95 +73,108 @@ const fines = {
   "Harsh Driving": 1000
 };
 
-/* SCORE TABLE */
-const scores = {
-  "Seatbelt Violation": 2,
-  "Alcohol Violation": 1,
-  "Drowsiness": 1,
-  "Harsh Braking": 2,
-  "Harsh Driving": 2
-};
+/* -----------------------------
+   GPS location for accident
+----------------------------- */
 
-/* GPS LOCATION */
 const accidentLocation = {
-  latitude: 12.0978888,
-  longitude: 75.5605588
+  lat: 12.0978888,
+  lng: 75.5605588
 };
 
-/* VIOLATION ENDPOINT */
+/* -----------------------------
+   POST VIOLATION
+----------------------------- */
+
 app.post("/violation", upload.single("image"), (req, res) => {
+
+  let violations = readData();
 
   const type = req.body.type || "Unknown";
 
   const imagePath = req.file
-    ? "/uploads/" + req.file.filename
+    ? `/uploads/${req.file.filename}`
     : null;
 
-  const now = new Date();
+  const now = new Date().toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata"
+  });
 
-  /* ACCIDENT OR COLLISION → EMERGENCY EVENT */
+  /* -----------------------------
+     Accident / Collision
+  ----------------------------- */
+
   if (type === "Accident" || type === "Collision") {
 
-    const emergency = {
-      id: Date.now(),
-      type: type,
-      vehicle: "KL59AB1234",
-      owner: "Mark",
-      phone: "+91 8520649127",
-      time: now.toLocaleString(),
-      location: accidentLocation,
-      camera: "Outside Cam",
-      image: imagePath
+    const event = {
+      vehicleNo: "KL59AB1234",
+      violationType: type,
+      fine: 0,
+      score: 0,
+      lat: accidentLocation.lat,
+      lng: accidentLocation.lng,
+      dateTime: now,
+      imageUrl: imagePath
     };
 
-    emergencies.push(emergency);
-
-    console.log("Emergency Event:", emergency);
+    violations.push(event);
+    writeData(violations);
 
     return res.json({
       status: "emergency_logged",
-      event: emergency
+      data: event
     });
   }
 
-  /* NORMAL VIOLATIONS */
+  /* -----------------------------
+     Normal violation
+  ----------------------------- */
+
+  const fine = fines[type] || 0;
+
   const violation = {
-    id: Date.now(),
-    type: type,
-    fine: fines[type] || 0,
-    score: scores[type] || 0,
-    time: now.toLocaleString(),
-    image: imagePath,
-    camera: "Outside Cam",
-    vehicle: "KL59AB1234"
+    vehicleNo: "KL59AB1234",
+    violationType: type,
+    fine: fine,
+    score: violations.length + 1,
+    lat: null,
+    lng: null,
+    dateTime: now,
+    imageUrl: imagePath
   };
 
   violations.push(violation);
 
-  console.log("Violation logged:", violation);
+  writeData(violations);
 
   res.json({
     status: "violation_logged",
-    violation: violation
+    data: violation
   });
 
 });
 
-/* GET VIOLATIONS */
+/* -----------------------------
+   GET violations
+----------------------------- */
+
 app.get("/violations", (req, res) => {
-  res.json(violations);
+  res.json(readData());
 });
 
-/* GET EMERGENCY EVENTS */
-app.get("/emergencies", (req, res) => {
-  res.json(emergencies);
+/* -----------------------------
+   Score endpoint
+----------------------------- */
+
+app.get("/score", (req, res) => {
+  const data = readData();
+  res.json({ score: data.length });
 });
 
-/* ROOT */
-app.get("/", (req, res) => {
-  res.send("SAFEWAY Vehicle Blackbox Server Running");
-});
+/* -----------------------------
+   Start server
+----------------------------- */
 
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("SafeDrive Server Running on port", PORT);
 });
