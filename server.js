@@ -7,104 +7,85 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// --- CONFIGURATION ---
 const UPLOADS_FOLDER = path.join(__dirname, 'uploads');
 const DB_FILE = path.join(__dirname, 'violations.json');
 
-// --- INITIALIZATION ---
-// Create uploads folder if it doesn't exist
 if (!fs.existsSync(UPLOADS_FOLDER)) {
     fs.mkdirSync(UPLOADS_FOLDER, { recursive: true });
 }
 
-// Create violations.json if it doesn't exist
 if (!fs.existsSync(DB_FILE)) {
     fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
 }
 
-// --- MIDDLEWARE ---
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- MULTER STORAGE CONFIGURATION ---
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, UPLOADS_FOLDER);
-    },
-    filename: (req, file, cb) => {
-        // Format: timestamp-originalName
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + path.extname(file.originalname || '.jpg'));
-    }
+    destination: (req, file, cb) => cb(null, UPLOADS_FOLDER),
+    filename: (req, file, cb) => cb(null, Date.now() + '.jpg')
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({ storage });
 
-// --- API ENDPOINTS ---
-
-// 1. Root Endpoint
+// ROOT
 app.get('/', (req, res) => {
-    res.send("SafeDrive Backend Server Running");
+    res.send("Server Running");
 });
 
-// 2. Image Upload Endpoint (POST /upload)
+// UPLOAD
 app.post('/upload', upload.single('image'), (req, res) => {
     try {
+        console.log("UPLOAD RECEIVED");
+
         if (!req.file) {
-            return res.status(400).json({ status: "error", message: "No image file provided" });
+            console.log("No file");
+            return res.status(400).json({ error: "No file" });
         }
 
-        const violationCode = req.body.type || "Unknown";
-        const newRecord = {
+        const record = {
             timestamp: new Date().toISOString(),
-            violation_code: violationCode,
+            violation_code: req.body.type || "Unknown",
             filename: req.file.filename,
             path: `/uploads/${req.file.filename}`
         };
 
-        // Read existing records
-        const data = fs.readFileSync(DB_FILE, 'utf8');
-        const violations = JSON.parse(data);
+        let data = [];
 
-        // Add new record and save
-        violations.push(newRecord);
-        fs.writeFileSync(DB_FILE, JSON.stringify(violations, null, 2));
+        try {
+            const file = fs.readFileSync(DB_FILE, 'utf8');
+            data = file ? JSON.parse(file) : [];
+        } catch {
+            data = [];
+        }
 
-        console.log(`[EVENT] Violation ${violationCode} logged. Image: ${req.file.filename}`);
+        data.push(record);
+        fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 
-        res.json({
-            status: "success",
-            message: "Image uploaded",
-            record: newRecord
-        });
-    } catch (error) {
-        console.error("Upload Error:", error);
-        res.status(500).json({ status: "error", message: "Internal server error" });
+        console.log("SAVED:", record);
+
+        res.json({ success: true });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Server error" });
     }
 });
 
-// 3. Get All Violations (GET /api/violations)
+// GET DATA
 app.get('/api/violations', (req, res) => {
     try {
-        const data = fs.readFileSync(DB_FILE, 'utf8');
-        res.json(JSON.parse(data));
-    } catch (error) {
-        res.status(500).json({ status: "error", message: "Could not read database" });
+        const file = fs.readFileSync(DB_FILE, 'utf8');
+        res.json(file ? JSON.parse(file) : []);
+    } catch {
+        res.json([]);
     }
 });
 
-// 4. Serve Static Images (GET /uploads/:filename)
+// STATIC
 app.use('/uploads', express.static(UPLOADS_FOLDER));
 
-// --- START SERVER ---
 app.listen(PORT, () => {
-    console.log(`
-==============================
-SafeDrive Backend Server Running
-Port: ${PORT}
-Uploads: ${UPLOADS_FOLDER}
-Database: ${DB_FILE}
-==============================
-    `);
+    console.log("SERVER STARTED");
 });
