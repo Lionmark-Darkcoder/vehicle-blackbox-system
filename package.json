@@ -1,7 +1,7 @@
 {
   "name": "vehicle-blackbox-server",
-  "version": "1.1.1",
-  "description": "SAFEWAY Smart Vehicle Blackbox Monitoring Server",
+  "version": "1.2.0",
+  "description": "SAFEWAY Smart Vehicle AI Enforcement Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
