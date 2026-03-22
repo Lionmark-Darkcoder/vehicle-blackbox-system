@@ -5,88 +5,107 @@ const path = require('path');
 const cors = require('cors');
 
 const app = express();
+const PORT = process.env.PORT || 10000;
+
+// PATHS
+const UPLOADS_FOLDER = path.join(__dirname, 'uploads');
+const DATA_FOLDER = path.join(__dirname, 'data');
+const DB_FILE = path.join(DATA_FOLDER, 'violations.json');
+
+// CREATE DIRS
+if (!fs.existsSync(UPLOADS_FOLDER)) fs.mkdirSync(UPLOADS_FOLDER, { recursive: true });
+if (!fs.existsSync(DATA_FOLDER)) fs.mkdirSync(DATA_FOLDER, { recursive: true });
+if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
+
+// MIDDLEWARE
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-const UPLOADS = path.join(__dirname, 'uploads');
-const DB = path.join(__dirname, 'data/violations.json');
+// STATIC
+app.use('/uploads', express.static(UPLOADS_FOLDER));
 
-if (!fs.existsSync(UPLOADS)) fs.mkdirSync(UPLOADS, { recursive: true });
-if (!fs.existsSync('data')) fs.mkdirSync('data');
-if (!fs.existsSync(DB)) fs.writeFileSync(DB, JSON.stringify([]));
-
+// MULTER
 const storage = multer.diskStorage({
-  destination: UPLOADS,
-  filename: (req, file, cb) => cb(null, Date.now() + '.jpg')
+  destination: (req, file, cb) => cb(null, UPLOADS_FOLDER),
+  filename: (req, file, cb) => cb(null, Date.now() + ".jpg")
 });
-
 const upload = multer({ storage });
 
-// FINAL SCORE MAP
-const SCORE_MAP = {
-  SEATBELT: 1,
-  DOOR: 1,
-  ALCOHOL: 3,
-  HARSH_BRAKING: 3,
-  DROWSINESS: 5,
-  HARSH_DRIVING: 5,
-  OVERSPEED: 5,
-  ACCIDENT: 0,
-  COLLISION: 0
-};
-
-let score = 0;
-let cycle = [];
-
-app.post('/upload', upload.single('image'), (req, res) => {
-
-  const type = req.body.type;
-
-  const record = {
-    time: new Date(),
-    type,
-    image: `/uploads/${req.file.filename}`,
-    location: "9.9312,76.2673"
-  };
-
-  let data = JSON.parse(fs.readFileSync(DB));
-  data.push(record);
-  fs.writeFileSync(DB, JSON.stringify(data, null, 2));
-
-  let emergency = null;
-
-  if (type === "ACCIDENT" || type === "COLLISION") {
-    emergency = record;
-  }
-
-  let add = SCORE_MAP[type] || 0;
-  score += add;
-
-  if (add > 0) cycle.push(record);
-
-  let challan = null;
-
-  if (score >= 5) {
-    challan = {
-      totalScore: score,
-      violations: cycle,
-      fine: score * 1000,
-      image: record.image,
-      date: new Date().toLocaleString()
-    };
-
-    score = 0;
-    cycle = [];
-  }
-
-  res.json({
-    record,
-    score,
-    challan,
-    emergency
-  });
+// ROOT
+app.get('/', (req, res) => {
+  res.send("🚀 Server Running");
 });
 
-app.use('/uploads', express.static(UPLOADS));
 
-app.listen(10000, () => console.log("🚀 Server Ready"));
+// 🔥 IMPORTANT FUNCTION
+function getScore(type) {
+  const scores = {
+    SEATBELT: 1,
+    DOOR: 1,
+    ALCOHOL: 3,
+    BRAKING: 3,
+    DROWSINESS: 5,
+    HARSH: 5,
+    OVERSPEED: 5
+  };
+  return scores[type] || 0;
+}
+
+
+// 🚀 UPLOAD API
+app.post('/upload', upload.single('image'), (req, res) => {
+  try {
+    console.log("📥 Upload received");
+
+    const violationType =
+      req.body.type ||
+      req.body.violation ||
+      req.body.event ||
+      "UNKNOWN";
+
+    const record = {
+      timestamp: new Date().toISOString(),
+      violation_type: violationType,
+      vehicle: "KL59AB1234",
+      score: getScore(violationType),
+      filename: req.file ? req.file.filename : null,
+      path: req.file ? `/uploads/${req.file.filename}` : null
+    };
+
+    let data = [];
+
+    try {
+      data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    } catch {}
+
+    data.push(record);
+
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+
+    console.log("✅ Saved:", record);
+
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Upload failed" });
+  }
+});
+
+
+// 🔥 THIS WAS MISSING ❗
+app.get('/api/violations', (req, res) => {
+  try {
+    const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    res.json(data);
+  } catch {
+    res.json([]);
+  }
+});
+
+
+// START SERVER
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
