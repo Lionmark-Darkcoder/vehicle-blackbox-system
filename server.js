@@ -7,76 +7,77 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-const upload = multer({ dest: 'uploads/' });
+const UPLOADS = path.join(__dirname, 'uploads');
+const DATA = path.join(__dirname, 'data');
+const DB = path.join(DATA, 'violations.json');
+
+if (!fs.existsSync(UPLOADS)) fs.mkdirSync(UPLOADS);
+if (!fs.existsSync(DATA)) fs.mkdirSync(DATA);
+if (!fs.existsSync(DB)) fs.writeFileSync(DB, "[]");
 
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
+app.use('/uploads', express.static(UPLOADS));
 
-let violations = [];
-let accidents = [];
-let currentScore = 0;
-let challans = [];
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOADS),
+  filename: (req, file, cb) => cb(null, Date.now() + ".jpg")
+});
 
-// SCORE MAP
-const scores = {
-  SEATBELT: 1,
-  DOOR: 1,
-  ALCOHOL: 3,
-  BRAKING: 3,
-  DROWSINESS: 5,
-  HARSH: 5,
-  OVERSPEED: 5
-};
+const upload = multer({ storage });
+
+let challanLock = false;
+
+// SCORE
+function getScore(type) {
+  return {
+    SEATBELT: 1,
+    DOOR: 1,
+    ALCOHOL: 3,
+    HARSH_BRAKING: 3,
+    DROWSINESS: 5,
+    HARSH_DRIVING: 5,
+    OVERSPEED: 5
+  }[type] || 0;
+}
 
 // UPLOAD
 app.post('/upload', upload.single('image'), (req, res) => {
 
-  const type = req.headers['type'] || "UNKNOWN";
-  const file = req.file ? `/uploads/${req.file.filename}` : null;
+  const type =
+    req.headers['type'] ||
+    req.body.type ||
+    "UNKNOWN";
 
-  // 🚨 ACCIDENT (NO SCORE)
-  if (type === "ACCIDENT" || type === "COLLISION") {
-    accidents.push({
-      type,
-      image: file,
-      time: new Date()
-    });
+  const isEmergency = ["ACCIDENT", "COLLISION"].includes(type);
 
-    return res.json({ success: true });
-  }
+  let data = JSON.parse(fs.readFileSync(DB));
 
-  const score = scores[type] || 0;
-
-  currentScore += score;
-
-  violations.push({
+  const record = {
+    time: new Date(),
     type,
-    score,
-    image: file,
-    time: new Date()
-  });
+    category: isEmergency ? "EVENT" : "VIOLATION",
+    score: isEmergency ? 0 : getScore(type),
+    image: req.file ? `/uploads/${req.file.filename}` : null
+  };
 
-  // 🎯 CHALLAN LOGIC (EVERY 5)
-  if (currentScore >= 5) {
-
-    const group = violations.slice(-5);
-
-    challans.push({
-      id: Date.now(),
-      violations: group,
-      total: currentScore
-    });
-
-    currentScore = 0; // reset
-  }
+  data.push(record);
+  fs.writeFileSync(DB, JSON.stringify(data, null, 2));
 
   res.json({ success: true });
 });
 
-// GET APIs
-app.get('/api/violations', (req, res) => res.json(violations));
-app.get('/api/accidents', (req, res) => res.json(accidents));
-app.get('/api/challans', (req, res) => res.json(challans));
+// GET
+app.get('/api/violations', (req, res) => {
+  const data = JSON.parse(fs.readFileSync(DB));
+  res.json(data);
+});
 
-app.listen(PORT, () => console.log("Server running"));
+// RESET
+app.post('/api/reset', (req, res) => {
+  fs.writeFileSync(DB, "[]");
+  challanLock = false;
+  res.json({ ok: true });
+});
+
+app.listen(PORT, () => console.log("🚀 Server running"));
