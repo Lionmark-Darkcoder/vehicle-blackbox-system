@@ -1,5 +1,4 @@
 const express = require('express');
-const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
@@ -7,172 +6,128 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// PATHS
-const UPLOADS_FOLDER = path.join(__dirname, 'uploads');
-const DATA_FOLDER = path.join(__dirname, 'data');
-const DB_FILE = path.join(DATA_FOLDER, 'violations.json');
-
-// CREATE DIRS
-if (!fs.existsSync(UPLOADS_FOLDER)) fs.mkdirSync(UPLOADS_FOLDER, { recursive: true });
-if (!fs.existsSync(DATA_FOLDER)) fs.mkdirSync(DATA_FOLDER, { recursive: true });
-if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
-
-// MIDDLEWARE
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true }));
 
-// STATIC
-app.use('/uploads', express.static(UPLOADS_FOLDER));
+// ===== PATHS =====
+const UPLOADS = path.join(__dirname, 'uploads');
+const DATA = path.join(__dirname, 'data');
+const DB = path.join(DATA, 'violations.json');
+const EVENTS = path.join(DATA, 'events.json');
 
-// MULTER (fallback support)
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_FOLDER),
-  filename: (req, file, cb) => cb(null, Date.now() + ".jpg")
-});
-const upload = multer({ storage });
+if (!fs.existsSync(UPLOADS)) fs.mkdirSync(UPLOADS, { recursive: true });
+if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
+if (!fs.existsSync(DB)) fs.writeFileSync(DB, JSON.stringify([], null, 2));
+if (!fs.existsSync(EVENTS)) fs.writeFileSync(EVENTS, JSON.stringify([], null, 2));
 
-// ROOT
-app.get('/', (req, res) => {
-  res.send("🚀 Vehicle Blackbox Server Running");
-});
+app.use('/uploads', express.static(UPLOADS));
 
+// ===== SCORE + FINE =====
+const RULES = {
+  SEATBELT: { score: 1, fine: 500 },
+  DOOR: { score: 1, fine: 500 },
+  ALCOHOL: { score: 3, fine: 2000 },
+  HARSH_BRAKING: { score: 3, fine: 1500 },
+  DROWSINESS: { score: 5, fine: 3000 },
+  HARSH_DRIVING: { score: 5, fine: 3000 },
+  OVERSPEED: { score: 5, fine: 2000 }
+};
 
-// 🔥 SCORE SYSTEM
-function getScore(type) {
-  const scores = {
-    SEATBELT: 1,
-    DOOR: 1,
-    ALCOHOL: 3,
-    HARSH_BRAKING: 3,
-    DROWSINESS: 5,
-    HARSH_DRIVING: 5,
-    OVERSPEED: 5
-  };
-  return scores[type] || 0;
-}
+// ===== STATE (for batching) =====
+let currentBatch = [];
+let batchScore = 0;
 
-
-// 🔥 FINE SYSTEM (Kerala style approx)
-function getFine(score) {
-  if (score >= 10) return 4000;
-  if (score >= 5) return 2000;
-  return 0;
-}
-
-
-// 🔥 MAIN UPLOAD (ESP RAW IMAGE)
-app.post('/api/upload', async (req, res) => {
+// ===== UPLOAD =====
+app.post('/api/upload', (req, res) => {
   try {
+    const type = req.headers['x-type'] || "UNKNOWN";
 
-    console.log("📥 Upload request");
+    const rule = RULES[type] || { score: 0, fine: 0 };
 
-    const type =
-      req.headers['x-type'] ||
-      req.body.type ||
-      "UNKNOWN";
-
-    // SAVE IMAGE
     const filename = Date.now() + ".jpg";
-    const filePath = path.join(UPLOADS_FOLDER, filename);
+    const filePath = path.join(UPLOADS, filename);
 
     const chunks = [];
-
-    req.on('data', chunk => {
-      chunks.push(chunk);
-    });
+    req.on('data', c => chunks.push(c));
 
     req.on('end', () => {
 
-      const buffer = Buffer.concat(chunks);
-      fs.writeFileSync(filePath, buffer);
-
-      console.log("📸 Image saved:", filename);
-
-      // LOAD DB
-      let data = [];
-      try {
-        data = JSON.parse(fs.readFileSync(DB_FILE));
-      } catch {}
-
-      const score = getScore(type);
+      fs.writeFileSync(filePath, Buffer.concat(chunks));
 
       const record = {
         id: Date.now(),
-        timestamp: new Date().toISOString(),
-        violation_type: type,
-        vehicle: "KL59AB1234",
-        score: score,
-        fine: getFine(score),
-        image: `/uploads/${filename}`
+        type,
+        score: rule.score,
+        fine: rule.fine,
+        image: `/uploads/${filename}`,
+        time: new Date().toISOString()
       };
 
-      data.push(record);
+      currentBatch.push(record);
+      batchScore += rule.score;
 
-      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+      let all = JSON.parse(fs.readFileSync(DB));
 
-      console.log("✅ Logged:", record);
+      let challanGenerated = false;
 
-      res.json({ success: true });
+      // 🔥 GENERATE CHALLAN ONLY WHEN >=5
+      if (batchScore >= 5) {
+        all.push({
+          id: Date.now(),
+          challan: true,
+          totalScore: batchScore,
+          totalFine: currentBatch.reduce((a, b) => a + b.fine, 0),
+          violations: currentBatch,
+          paid: false,
+          time: new Date().toISOString()
+        });
 
+        currentBatch = [];
+        batchScore = 0;
+        challanGenerated = true;
+      } else {
+        all.push(record);
+      }
+
+      fs.writeFileSync(DB, JSON.stringify(all, null, 2));
+
+      res.json({
+        success: true,
+        challan: challanGenerated
+      });
     });
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Upload failed" });
+  } catch (e) {
+    res.status(500).json({ error: true });
   }
 });
 
-
-// 🔥 GET ALL VIOLATIONS
+// ===== GET =====
 app.get('/api/violations', (req, res) => {
-  try {
-    const data = JSON.parse(fs.readFileSync(DB_FILE));
-    res.json(data);
-  } catch {
-    res.json([]);
-  }
+  res.json(JSON.parse(fs.readFileSync(DB)));
 });
 
-
-// 🔥 CLEAR DATA (TESTING)
-app.get('/api/clear', (req, res) => {
-  fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
-  res.send("🧹 Cleared");
-});
-
-
-// 🚨 ACCIDENT EVENTS (NO SCORE)
+// ===== EVENTS (ACCIDENT / COLLISION) =====
 app.post('/api/event', (req, res) => {
-  try {
+  const type = req.body.type || "EVENT";
 
-    const type = req.body.type || "EVENT";
+  let data = JSON.parse(fs.readFileSync(EVENTS));
 
-    let data = JSON.parse(fs.readFileSync(DB_FILE));
+  data.push({
+    id: Date.now(),
+    type,
+    location: "KOCHI",
+    image: req.body.image || null,
+    time: new Date().toISOString()
+  });
 
-    data.push({
-      id: Date.now(),
-      timestamp: new Date().toISOString(),
-      violation_type: type,
-      vehicle: "KL59AB1234",
-      score: 0,
-      fine: 0,
-      emergency: true
-    });
+  fs.writeFileSync(EVENTS, JSON.stringify(data, null, 2));
 
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-
-    console.log("🚨 EVENT:", type);
-
-    res.json({ success: true });
-
-  } catch {
-    res.json({ error: true });
-  }
+  res.json({ success: true });
 });
 
-
-// 🚀 START SERVER
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+app.get('/api/events', (req, res) => {
+  res.json(JSON.parse(fs.readFileSync(EVENTS)));
 });
+
+app.listen(PORT, () => console.log("🚀 Server Running"));
