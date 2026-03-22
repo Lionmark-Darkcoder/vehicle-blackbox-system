@@ -15,7 +15,6 @@ const UPLOADS = path.join(__dirname, 'uploads');
 const DATA = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA, 'violations.json');
 
-// ================= INIT =================
 if (!fs.existsSync(UPLOADS)) fs.mkdirSync(UPLOADS, { recursive: true });
 if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
 if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify([]));
@@ -36,7 +35,8 @@ const SCORE_MAP = {
   HARSH_BRAKING: 3,
   DROWSINESS: 5,
   HARSH_DRIVING: 5,
-  ACCIDENT: 5
+  ACCIDENT: 5,
+  OVERSPEED: 5   // 🔥 added
 };
 
 // ================= STATE =================
@@ -60,22 +60,35 @@ app.post('/upload', upload.single('image'), (req, res) => {
       type,
       vehicle,
       image: `/uploads/${req.file.filename}`,
-      location: "9.9312,76.2673" // fake GPS
+      location: "9.9312,76.2673"
     };
 
-    // SAVE
+    // ===== SAVE DATA =====
     let data = JSON.parse(fs.readFileSync(DB_FILE));
     data.push(record);
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 
-    // SCORE ADD
+    // ===== SCORE =====
     const score = SCORE_MAP[type] || 0;
     currentScore += score;
     cycleViolations.push(record);
 
     let challan = null;
+    let emergency = null;
 
-    // 🚨 CHALLAN CONDITION
+    // 🚨 ACCIDENT ALERT SYSTEM
+    if (type === "ACCIDENT") {
+      emergency = {
+        alert: true,
+        message: "🚨 ACCIDENT DETECTED!",
+        vehicle,
+        location: record.location,
+        image: record.image,
+        time: record.timestamp
+      };
+    }
+
+    // 🚨 CHALLAN LOGIC (cycle of 5)
     if (currentScore >= 5) {
       challan = {
         vehicle,
@@ -86,7 +99,7 @@ app.post('/upload', upload.single('image'), (req, res) => {
         date: new Date().toLocaleString()
       };
 
-      // RESET CYCLE
+      // RESET AFTER CHALLAN
       currentScore = 0;
       cycleViolations = [];
     }
@@ -95,19 +108,38 @@ app.post('/upload', upload.single('image'), (req, res) => {
       success: true,
       record,
       currentScore,
-      challan
+      challan,
+      emergency
     });
 
   } catch (err) {
-    console.error(err);
+    console.error("❌ ERROR:", err);
     res.status(500).json({ error: "Server Error" });
   }
 });
 
 // ================= GET VIOLATIONS =================
 app.get('/api/violations', (req, res) => {
+  try {
+    const data = JSON.parse(fs.readFileSync(DB_FILE));
+    res.json(data);
+  } catch {
+    res.json([]);
+  }
+});
+
+// ================= STATS API (FOR DASHBOARD FIX) =================
+app.get('/api/stats', (req, res) => {
   const data = JSON.parse(fs.readFileSync(DB_FILE));
-  res.json(data);
+
+  let totalViolations = data.length;
+  let accidentCount = data.filter(v => v.type === "ACCIDENT").length;
+
+  res.json({
+    totalViolations,
+    accidentCount,
+    systemStatus: "ACTIVE"
+  });
 });
 
 // ================= STATIC =================
@@ -115,5 +147,10 @@ app.use('/uploads', express.static(UPLOADS));
 
 // ================= START =================
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`
+==============================
+🚀 SafeDrive Server Running
+PORT: ${PORT}
+==============================
+`);
 });
