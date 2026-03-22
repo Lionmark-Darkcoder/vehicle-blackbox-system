@@ -6,115 +6,61 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-const uploadDir = path.join(__dirname, 'uploads');
-const dataDir = path.join(__dirname, 'data');
-const dbFile = path.join(dataDir, 'violations.json');
+const UPLOADS = path.join(__dirname, 'uploads');
+const DATA = path.join(__dirname, 'data');
+const DB = path.join(DATA, 'db.json');
 
-/* CREATE FOLDERS */
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir);
-if (!fs.existsSync(dbFile)) fs.writeFileSync(dbFile, '[]');
+if (!fs.existsSync(UPLOADS)) fs.mkdirSync(UPLOADS);
+if (!fs.existsSync(DATA)) fs.mkdirSync(DATA);
+if (!fs.existsSync(DB)) fs.writeFileSync(DB, JSON.stringify([]));
 
-/* MIDDLEWARE */
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use('/uploads', express.static(uploadDir));
+app.use('/uploads', express.static(UPLOADS));
 
-/* TEST */
+// ROOT
 app.get('/', (req, res) => {
-  res.send("🚀 SERVER WORKING");
+  res.send("SERVER OK 🚀");
 });
 
-/* SCORE */
-function getScore(type) {
-  return {
-    SEATBELT: 1,
-    DOOR: 1,
-    ALCOHOL: 3,
-    HARSH_BRAKING: 3,
-    DROWSINESS: 5,
-    HARSH_DRIVING: 5,
-    OVERSPEED: 5
-  }[type] || 0;
-}
-
-/* FINE */
-function getFine(type) {
-  return {
-    SEATBELT: 500,
-    DOOR: 500,
-    ALCOHOL: 1000,
-    HARSH_BRAKING: 1000,
-    DROWSINESS: 2000,
-    HARSH_DRIVING: 2000,
-    OVERSPEED: 2000
-  }[type] || 0;
-}
-
-/* UPLOAD (STABLE VERSION) */
+// ✅ UPLOAD ROUTE (FIXED)
 app.post('/upload', (req, res) => {
-  try {
-    const type = req.headers['type'] || "UNKNOWN";
+  console.log("📸 Upload request received");
 
-    const filename = Date.now() + ".jpg";
-    const filepath = path.join(uploadDir, filename);
+  const type = req.headers['type'] || "UNKNOWN";
 
-    const chunks = [];
+  const filename = Date.now() + ".jpg";
+  const filepath = path.join(UPLOADS, filename);
 
-    req.on('data', chunk => {
-      chunks.push(chunk);
+  let data = [];
+
+  req.on('data', chunk => data.push(chunk));
+
+  req.on('end', () => {
+    const buffer = Buffer.concat(data);
+
+    fs.writeFileSync(filepath, buffer);
+
+    let db = JSON.parse(fs.readFileSync(DB));
+
+    db.push({
+      id: Date.now(),
+      type,
+      image: `/uploads/${filename}`,
+      time: new Date().toISOString()
     });
 
-    req.on('end', () => {
+    fs.writeFileSync(DB, JSON.stringify(db, null, 2));
 
-      const buffer = Buffer.concat(chunks);
-      fs.writeFileSync(filepath, buffer);
+    console.log("✅ Saved:", filename);
 
-      let data = JSON.parse(fs.readFileSync(dbFile));
-
-      const isEmergency = (type === "ACCIDENT" || type === "COLLISION");
-
-      const record = {
-        id: Date.now(),
-        type,
-        timestamp: new Date().toISOString(),
-        location: "Chemperi",
-        lat: "12.0676",
-        lng: "75.5716",
-        image: `/uploads/${filename}`
-      };
-
-      if (!isEmergency) {
-        record.score = getScore(type);
-        record.fine = getFine(type);
-      }
-
-      data.push(record);
-      fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
-
-      console.log("Saved:", type);
-
-      res.json({ success: true });
-
-    });
-
-  } catch (err) {
-    console.log("ERROR:", err);
-    res.status(500).json({ error: "Upload failed" });
-  }
+    res.status(200).json({ success: true });
+  });
 });
 
-/* APIs */
-app.get('/api/violations', (req, res) => {
-  const data = JSON.parse(fs.readFileSync(dbFile));
-  res.json(data.filter(v => v.score).reverse());
+// GET DATA
+app.get('/api/data', (req, res) => {
+  const db = JSON.parse(fs.readFileSync(DB));
+  res.json(db.reverse());
 });
 
-app.get('/api/emergency', (req, res) => {
-  const data = JSON.parse(fs.readFileSync(dbFile));
-  res.json(data.filter(v => !v.score).reverse());
-});
-
-app.listen(PORT, () => {
-  console.log("🚀 Running on port", PORT);
-});
+app.listen(PORT, () => console.log("🚀 Server running on", PORT));
