@@ -22,11 +22,38 @@ app.get('/', (req, res) => {
   res.send("🚀 SERVER RUNNING");
 });
 
-// ✅ UPLOAD ROUTE
+// 🔥 SCORE SYSTEM
+function getScore(type) {
+  return {
+    SEATBELT: 1,
+    DOOR: 1,
+    ALCOHOL: 3,
+    HARSH_BRAKING: 3,
+    DROWSINESS: 5,
+    HARSH_DRIVING: 5,
+    OVERSPEED: 5
+  }[type] || 0;
+}
+
+// 🔥 FINE SYSTEM
+function getFine(type) {
+  return {
+    SEATBELT: 500,
+    DOOR: 500,
+    ALCOHOL: 1000,
+    HARSH_BRAKING: 1000,
+    DROWSINESS: 2000,
+    HARSH_DRIVING: 2000,
+    OVERSPEED: 2000
+  }[type] || 0;
+}
+
+// ✅ UPLOAD ROUTE (FINAL)
 app.post('/upload', (req, res) => {
   console.log("📸 Upload received");
 
   const type = req.headers['type'] || "UNKNOWN";
+
   const location = "Chemperi";
   const lat = "12.0676";
   const lng = "75.5716";
@@ -44,15 +71,24 @@ app.post('/upload', (req, res) => {
 
     let db = JSON.parse(fs.readFileSync(DB));
 
-    db.push({
+    const isEmergency = (type === "ACCIDENT" || type === "COLLISION");
+
+    const record = {
       id: Date.now(),
-      type,
+      violation_type: type,
       location,
       lat,
       lng,
       image: `/uploads/${filename}`,
       time: new Date().toISOString()
-    });
+    };
+
+    if (!isEmergency) {
+      record.score = getScore(type);
+      record.fine = getFine(type);
+    }
+
+    db.push(record);
 
     fs.writeFileSync(DB, JSON.stringify(db, null, 2));
 
@@ -62,7 +98,7 @@ app.post('/upload', (req, res) => {
   });
 });
 
-// GET DATA
+// ✅ GET ALL DATA
 app.get('/api/data', (req, res) => {
   const db = JSON.parse(fs.readFileSync(DB));
   res.json(db.reverse());
