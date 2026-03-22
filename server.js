@@ -19,13 +19,13 @@ if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify([], null, 
 
 // MIDDLEWARE
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // STATIC
 app.use('/uploads', express.static(UPLOADS_FOLDER));
 
-// MULTER
+// MULTER (fallback support)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOADS_FOLDER),
   filename: (req, file, cb) => cb(null, Date.now() + ".jpg")
@@ -34,11 +34,11 @@ const upload = multer({ storage });
 
 // ROOT
 app.get('/', (req, res) => {
-  res.send("🚀 Server Running");
+  res.send("🚀 Vehicle Blackbox Server Running");
 });
 
 
-// 🔥 SCORE SYSTEM (FIXED)
+// 🔥 SCORE SYSTEM
 function getScore(type) {
   const scores = {
     SEATBELT: 1,
@@ -53,85 +53,69 @@ function getScore(type) {
 }
 
 
-// 🔥 GET TOTAL SCORE
-function getTotalScore(data) {
-  return data.reduce((sum, v) => sum + (v.score || 0), 0);
+// 🔥 FINE SYSTEM (Kerala style approx)
+function getFine(score) {
+  if (score >= 10) return 4000;
+  if (score >= 5) return 2000;
+  return 0;
 }
 
 
-// 🚀 UPLOAD API (FULL FIX)
-app.post('/api/upload', upload.single('image'), (req, res) => {
+// 🔥 MAIN UPLOAD (ESP RAW IMAGE)
+app.post('/api/upload', async (req, res) => {
   try {
-    console.log("📥 Upload received");
+
+    console.log("📥 Upload request");
 
     const type =
+      req.headers['x-type'] ||
       req.body.type ||
-      req.body.violation ||
-      req.body.event ||
       "UNKNOWN";
 
-    const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
+    // SAVE IMAGE
+    const filename = Date.now() + ".jpg";
+    const filePath = path.join(UPLOADS_FOLDER, filename);
 
-    let data = [];
-    try {
-      data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    } catch {}
+    const chunks = [];
 
-    // 🚨 EMERGENCY EVENTS
-    if (type === "ACCIDENT" || type === "COLLISION") {
-      const emergency = {
+    req.on('data', chunk => {
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+
+      const buffer = Buffer.concat(chunks);
+      fs.writeFileSync(filePath, buffer);
+
+      console.log("📸 Image saved:", filename);
+
+      // LOAD DB
+      let data = [];
+      try {
+        data = JSON.parse(fs.readFileSync(DB_FILE));
+      } catch {}
+
+      const score = getScore(type);
+
+      const record = {
+        id: Date.now(),
         timestamp: new Date().toISOString(),
         violation_type: type,
-        emergency: true,
-        image: imagePath
+        vehicle: "KL59AB1234",
+        score: score,
+        fine: getFine(score),
+        image: `/uploads/${filename}`
       };
 
-      data.push(emergency);
+      data.push(record);
+
       fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 
-      console.log("🚨 EMERGENCY:", emergency);
+      console.log("✅ Logged:", record);
 
-      return res.json({ status: "EMERGENCY" });
-    }
+      res.json({ success: true });
 
-    // NORMAL VIOLATION
-    const record = {
-      timestamp: new Date().toISOString(),
-      violation_type: type,
-      score: getScore(type),
-      image: imagePath
-    };
-
-    data.push(record);
-
-    // SAVE
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-
-    const totalScore = getTotalScore(data);
-
-    console.log("✅ Logged:", record);
-    console.log("📊 Total Score:", totalScore);
-
-    // 🚨 CHALLAN CONDITION
-    if (totalScore >= 5) {
-
-      const challan = {
-        totalScore,
-        fine: totalScore * 1000,
-        violations: data,
-        generatedAt: new Date().toISOString()
-      };
-
-      // RESET DB AFTER CHALLAN
-      fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
-
-      return res.json({
-        status: "CHALLAN",
-        challan
-      });
-    }
-
-    res.json({ status: "LOGGED" });
+    });
 
   } catch (err) {
     console.error(err);
@@ -140,10 +124,10 @@ app.post('/api/upload', upload.single('image'), (req, res) => {
 });
 
 
-// 🔥 GET VIOLATIONS (FIXED)
+// 🔥 GET ALL VIOLATIONS
 app.get('/api/violations', (req, res) => {
   try {
-    const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const data = JSON.parse(fs.readFileSync(DB_FILE));
     res.json(data);
   } catch {
     res.json([]);
@@ -151,7 +135,44 @@ app.get('/api/violations', (req, res) => {
 });
 
 
-// START SERVER
+// 🔥 CLEAR DATA (TESTING)
+app.get('/api/clear', (req, res) => {
+  fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
+  res.send("🧹 Cleared");
+});
+
+
+// 🚨 ACCIDENT EVENTS (NO SCORE)
+app.post('/api/event', (req, res) => {
+  try {
+
+    const type = req.body.type || "EVENT";
+
+    let data = JSON.parse(fs.readFileSync(DB_FILE));
+
+    data.push({
+      id: Date.now(),
+      timestamp: new Date().toISOString(),
+      violation_type: type,
+      vehicle: "KL59AB1234",
+      score: 0,
+      fine: 0,
+      emergency: true
+    });
+
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+
+    console.log("🚨 EVENT:", type);
+
+    res.json({ success: true });
+
+  } catch {
+    res.json({ error: true });
+  }
+});
+
+
+// 🚀 START SERVER
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
