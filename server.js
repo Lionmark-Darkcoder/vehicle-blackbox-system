@@ -30,7 +30,14 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// ===== SCORE SYSTEM =====
+// ===== DEMO GPS LOCATION (CHEMPERI) =====
+const DEMO_LOCATION = {
+  name: "Chemperi, Kannur, Kerala",
+  lat: 12.0676,
+  lng: 75.5716
+};
+
+// ===== SCORE =====
 function getScore(type) {
   return {
     SEATBELT: 1,
@@ -43,7 +50,7 @@ function getScore(type) {
   }[type] || 0;
 }
 
-// ===== FINE SYSTEM (KERALA STYLE) =====
+// ===== FINE =====
 function getFine(type) {
   return {
     SEATBELT: 500,
@@ -56,11 +63,10 @@ function getFine(type) {
   }[type] || 0;
 }
 
-// ===== UPLOAD API =====
+// ===== UPLOAD =====
 app.post('/upload', upload.single('image'), (req, res) => {
   try {
     const type = req.headers['type'] || req.body.type || "UNKNOWN";
-    const location = req.headers['location'] || "Kochi";
 
     const isEmergency = ["ACCIDENT", "COLLISION"].includes(type);
 
@@ -69,11 +75,24 @@ app.post('/upload', upload.single('image'), (req, res) => {
     const record = {
       id: Date.now(),
       time: new Date(),
+
+      // ===== VEHICLE INFO =====
+      vehicle: "KL59AB1234",
+      owner: "Mark",
+      mobile: "+918520649127",
+
+      // ===== VIOLATION =====
       type,
-      location,
       category: isEmergency ? "EVENT" : "VIOLATION",
       score: isEmergency ? 0 : getScore(type),
       fine: isEmergency ? 0 : getFine(type),
+
+      // ===== GPS LOCATION =====
+      location: DEMO_LOCATION.name,
+      lat: DEMO_LOCATION.lat,
+      lng: DEMO_LOCATION.lng,
+
+      // ===== IMAGE =====
       image: req.file ? `/uploads/${req.file.filename}` : null
     };
 
@@ -91,7 +110,7 @@ app.post('/upload', upload.single('image'), (req, res) => {
   }
 });
 
-// ===== GET ALL =====
+// ===== GET =====
 app.get('/api/violations', (req, res) => {
   try {
     const data = JSON.parse(fs.readFileSync(DB));
@@ -109,7 +128,7 @@ app.post('/api/reset', (req, res) => {
 
 // ===== ROOT =====
 app.get('/', (req, res) => {
-  res.send("🚀 Vehicle Blackbox Server Running");
+  res.send("🚀 Server Running with GPS Location");
 });
 
 // ===== START =====
