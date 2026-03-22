@@ -1,175 +1,120 @@
-#include "esp_camera.h"
-#include <WiFi.h>
-#include <HTTPClient.h>
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const cors = require('cors');
 
-/* WIFI */
-const char* ssid = "YOUR_WIFI";
-const char* password = "YOUR_PASS";
+const app = express();
+const PORT = process.env.PORT || 10000;
 
-/* SERVER */
-const char* serverUrl = "http://YOUR_SERVER_IP:10000/upload";
+const uploadDir = path.join(__dirname, 'uploads');
+const dataDir = path.join(__dirname, 'data');
+const dbFile = path.join(dataDir, 'violations.json');
 
-/* CAMERA PINS (AI THINKER) */
-#define PWDN_GPIO_NUM     32
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM      0
-#define SIOD_GPIO_NUM     26
-#define SIOC_GPIO_NUM     27
+/* CREATE FOLDERS */
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir);
+if (!fs.existsSync(dbFile)) fs.writeFileSync(dbFile, '[]');
 
-#define Y9_GPIO_NUM       35
-#define Y8_GPIO_NUM       34
-#define Y7_GPIO_NUM       39
-#define Y6_GPIO_NUM       36
-#define Y5_GPIO_NUM       21
-#define Y4_GPIO_NUM       19
-#define Y3_GPIO_NUM       18
-#define Y2_GPIO_NUM        5
+/* MIDDLEWARE */
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+app.use('/uploads', express.static(uploadDir));
 
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     23
-#define PCLK_GPIO_NUM     22
+/* TEST */
+app.get('/', (req, res) => {
+  res.send("🚀 SERVER WORKING");
+});
 
-#define FLASH_LED 4
-
-bool busy = false;
-
-/* CAMERA CONFIG */
-camera_config_t config;
-
-void startCamera(bool streamMode) {
-
-  config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer = LEDC_TIMER_0;
-
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-
-  config.pin_sscb_sda = SIOD_GPIO_NUM;
-  config.pin_sscb_scl = SIOC_GPIO_NUM;
-
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
-
-  config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG;
-
-  if (streamMode) {
-    config.frame_size = FRAMESIZE_QVGA;
-    config.fb_count = 2;
-  } else {
-    config.frame_size = FRAMESIZE_QVGA;
-    config.fb_count = 1;
-  }
-
-  config.jpeg_quality = 12;
-
-  esp_camera_init(&config);
+/* SCORE */
+function getScore(type) {
+  return {
+    SEATBELT: 1,
+    DOOR: 1,
+    ALCOHOL: 3,
+    HARSH_BRAKING: 3,
+    DROWSINESS: 5,
+    HARSH_DRIVING: 5,
+    OVERSPEED: 5
+  }[type] || 0;
 }
 
-/* CAPTURE + UPLOAD */
-void sendImage(String type) {
-
-  static unsigned long last = 0;
-  if (millis() - last < 4000) return;
-  last = millis();
-
-  if (busy) return;
-  busy = true;
-
-  Serial.println("📸 Capture start");
-
-  esp_camera_deinit();
-  delay(200);
-
-  startCamera(false);
-  delay(300);
-
-  digitalWrite(FLASH_LED, HIGH);
-  delay(150);
-
-  camera_fb_t * fb = esp_camera_fb_get();
-
-  digitalWrite(FLASH_LED, LOW);
-
-  if (!fb) {
-    Serial.println("❌ Capture failed");
-    busy = false;
-    return;
-  }
-
-  WiFiClient client;
-  HTTPClient http;
-
-  http.begin(client, serverUrl);
-  http.addHeader("Content-Type", "image/jpeg");
-  http.addHeader("type", type);
-  http.addHeader("location", "Chemperi");
-  http.addHeader("lat", "12.0676");
-  http.addHeader("lng", "75.5716");
-
-  int res = http.POST(fb->buf, fb->len);
-
-  if (res > 0) Serial.println("✅ Uploaded");
-  else Serial.println("❌ Upload fail");
-
-  http.end();
-  esp_camera_fb_return(fb);
-
-  esp_camera_deinit();
-  delay(200);
-
-  startCamera(true);
-
-  Serial.println("📡 Stream resumed");
-
-  busy = false;
+/* FINE */
+function getFine(type) {
+  return {
+    SEATBELT: 500,
+    DOOR: 500,
+    ALCOHOL: 1000,
+    HARSH_BRAKING: 1000,
+    DROWSINESS: 2000,
+    HARSH_DRIVING: 2000,
+    OVERSPEED: 2000
+  }[type] || 0;
 }
 
-/* SETUP */
-void setup() {
-  Serial.begin(115200);
-  pinMode(FLASH_LED, OUTPUT);
+/* UPLOAD (STABLE VERSION) */
+app.post('/upload', (req, res) => {
+  try {
+    const type = req.headers['type'] || "UNKNOWN";
 
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+    const filename = Date.now() + ".jpg";
+    const filepath = path.join(uploadDir, filename);
+
+    const chunks = [];
+
+    req.on('data', chunk => {
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+
+      const buffer = Buffer.concat(chunks);
+      fs.writeFileSync(filepath, buffer);
+
+      let data = JSON.parse(fs.readFileSync(dbFile));
+
+      const isEmergency = (type === "ACCIDENT" || type === "COLLISION");
+
+      const record = {
+        id: Date.now(),
+        type,
+        timestamp: new Date().toISOString(),
+        location: "Chemperi",
+        lat: "12.0676",
+        lng: "75.5716",
+        image: `/uploads/${filename}`
+      };
+
+      if (!isEmergency) {
+        record.score = getScore(type);
+        record.fine = getFine(type);
+      }
+
+      data.push(record);
+      fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
+
+      console.log("Saved:", type);
+
+      res.json({ success: true });
+
+    });
+
+  } catch (err) {
+    console.log("ERROR:", err);
+    res.status(500).json({ error: "Upload failed" });
   }
+});
 
-  Serial.println("\n✅ WiFi Connected");
-  Serial.println(WiFi.localIP());
+/* APIs */
+app.get('/api/violations', (req, res) => {
+  const data = JSON.parse(fs.readFileSync(dbFile));
+  res.json(data.filter(v => v.score).reverse());
+});
 
-  startCamera(true);
+app.get('/api/emergency', (req, res) => {
+  const data = JSON.parse(fs.readFileSync(dbFile));
+  res.json(data.filter(v => !v.score).reverse());
+});
 
-  Serial.println("READY: S D A B Y H O C I");
-}
-
-/* LOOP */
-void loop() {
-  if (Serial.available()) {
-    char c = Serial.read();
-
-    switch (c) {
-      case 'S': sendImage("SEATBELT"); break;
-      case 'D': sendImage("DOOR"); break;
-      case 'A': sendImage("ALCOHOL"); break;
-      case 'B': sendImage("HARSH_BRAKING"); break;
-      case 'Y': sendImage("DROWSINESS"); break;
-      case 'H': sendImage("HARSH_DRIVING"); break;
-      case 'O': sendImage("OVERSPEED"); break;
-      case 'C': sendImage("COLLISION"); break;
-      case 'I': sendImage("ACCIDENT"); break;
-    }
-  }
-}
+app.listen(PORT, () => {
+  console.log("🚀 Running on port", PORT);
+});
