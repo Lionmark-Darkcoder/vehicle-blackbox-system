@@ -3,152 +3,165 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
-const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ===== PATHS =====
-const UPLOADS_FOLDER = path.join(__dirname, 'uploads');
-const DATA_FOLDER = path.join(__dirname, 'data');
-const DB_FILE = path.join(DATA_FOLDER, 'violations.json');
-const CHALLAN_FOLDER = path.join(__dirname, 'challans');
+// ================= PATHS =================
+const UPLOADS = path.join(__dirname, 'uploads');
+const DATA_DIR = path.join(__dirname, 'data');
+const DB_FILE = path.join(DATA_DIR, 'violations.json');
+const SCORE_FILE = path.join(DATA_DIR, 'scores.json');
+const CHALLAN_DIR = path.join(__dirname, 'challans');
 
-// ===== INIT =====
-if (!fs.existsSync(UPLOADS_FOLDER)) fs.mkdirSync(UPLOADS_FOLDER, { recursive: true });
-if (!fs.existsSync(DATA_FOLDER)) fs.mkdirSync(DATA_FOLDER, { recursive: true });
-if (!fs.existsSync(CHALLAN_FOLDER)) fs.mkdirSync(CHALLAN_FOLDER, { recursive: true });
+// ================= INIT =================
+[UPLOADS, DATA_DIR, CHALLAN_DIR].forEach(dir => {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
+
 if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
+if (!fs.existsSync(SCORE_FILE)) fs.writeFileSync(SCORE_FILE, JSON.stringify({}, null, 2));
 
-// ===== MIDDLEWARE =====
+// ================= MIDDLEWARE =================
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(UPLOADS_FOLDER));
+app.use('/uploads', express.static(UPLOADS));
 
-// ===== MULTER =====
+// ================= MULTER =================
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, UPLOADS_FOLDER),
+    destination: (req, file, cb) => cb(null, UPLOADS),
     filename: (req, file, cb) => cb(null, Date.now() + '.jpg')
 });
 const upload = multer({ storage });
 
-// ===== SCORE MAP =====
-const SCORE_MAP = {
-    SEATBELT: 1,
-    DOOR: 1,
-    OVERSPEED: 3,
-    HARSH: 3,
-    ALCOHOL: 5,
-    DROWSY: 5,
-    ACCIDENT: 5,
-    COLLISION: 5
-};
+// ================= SCORE ENGINE =================
+function getScore(type) {
+    type = type.toUpperCase();
 
-// ===== HELPERS =====
-function readDB() {
-    return JSON.parse(fs.readFileSync(DB_FILE));
+    if (["SEATBELT", "DOOR"].includes(type)) return 1;
+    if (["OVERSPEED", "HARSH_DRIVING", "HARSH_BRAKING"].includes(type)) return 3;
+    if (["ALCOHOL", "DROWSINESS", "ACCIDENT", "COLLISION"].includes(type)) return 5;
+
+    return 0;
 }
 
-function writeDB(data) {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-}
-
-function getVehicleScore(vehicleId) {
-    const data = readDB();
-    return data
-        .filter(v => v.vehicleId === vehicleId && !v.challanGenerated)
-        .reduce((sum, v) => sum + v.score, 0);
-}
-
-// ===== ROOT =====
+// ================= ROOT =================
 app.get('/', (req, res) => {
-    res.send("✅ SafeDrive AI Server Running");
+    res.send("🚀 SafeDrive AI Server Running");
 });
 
-// ===== UPLOAD API =====
+// ================= UPLOAD =================
 app.post('/upload', upload.single('image'), (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ error: "No image" });
+        if (!req.file) {
+            return res.status(400).json({ error: "No image uploaded" });
+        }
 
-        const { vehicleId, violationType } = req.body;
-
-        const score = SCORE_MAP[violationType] || 1;
+        const type = (req.body.type || "UNKNOWN").toUpperCase();
+        const vehicle = req.body.vehicle || "UNKNOWN";
+        const lat = req.body.lat || "N/A";
+        const lon = req.body.lon || "N/A";
 
         const record = {
-            id: uuidv4(),
-            vehicleId: vehicleId || "UNKNOWN",
-            type: violationType || "UNKNOWN",
-            score,
+            id: Date.now(),
+            vehicle,
+            type,
+            score: getScore(type),
+            lat,
+            lon,
             timestamp: new Date().toISOString(),
-            imagePath: `/uploads/${req.file.filename}`,
-            challanGenerated: false
+            image: `/uploads/${req.file.filename}`
         };
 
-        let data = readDB();
-        data.push(record);
-        writeDB(data);
+        // Save violation
+        let violations = JSON.parse(fs.readFileSync(DB_FILE));
+        violations.push(record);
+        fs.writeFileSync(DB_FILE, JSON.stringify(violations, null, 2));
 
-        const totalScore = getVehicleScore(record.vehicleId);
+        // Update score
+        let scores = JSON.parse(fs.readFileSync(SCORE_FILE));
+        if (!scores[vehicle]) scores[vehicle] = 0;
+        scores[vehicle] += record.score;
 
-        console.log("📥 Violation:", record.type);
-        console.log("📊 Score:", totalScore);
+        // Challan trigger
+        if (scores[vehicle] >= 5) {
+            const challan = {
+                vehicle,
+                totalScore: scores[vehicle],
+                fine: scores[vehicle] * 500,
+                violations: violations.filter(v => v.vehicle === vehicle).slice(-5),
+                timestamp: new Date().toISOString()
+            };
 
-        // 🚨 AUTO CHALLAN
-        if (totalScore >= 5) generateChallan(record.vehicleId);
+            const file = path.join(CHALLAN_DIR, `${vehicle}_${Date.now()}.json`);
+            fs.writeFileSync(file, JSON.stringify(challan, null, 2));
 
-        res.json({ success: true, totalScore });
+            scores[vehicle] = 0; // reset after challan
+        }
+
+        fs.writeFileSync(SCORE_FILE, JSON.stringify(scores, null, 2));
+
+        console.log("✅ Saved:", record);
+
+        res.json({ success: true, record });
 
     } catch (err) {
-        console.error(err);
+        console.error("❌ Upload error:", err);
         res.status(500).json({ error: "Server error" });
     }
 });
 
-// ===== CHALLAN =====
-function generateChallan(vehicleId) {
-    let data = readDB();
-
-    const violations = data.filter(v => v.vehicleId === vehicleId && !v.challanGenerated);
-
-    let total = 0;
-
-    violations.forEach(v => {
-        total += v.score;
-        v.challanGenerated = true;
-    });
-
-    writeDB(data);
-
-    const challan = {
-        id: uuidv4(),
-        vehicleId,
-        totalScore: total,
-        violations,
-        generatedAt: new Date().toISOString()
-    };
-
-    const filePath = path.join(CHALLAN_FOLDER, `${vehicleId}_${Date.now()}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(challan, null, 2));
-
-    console.log("🚨 CHALLAN GENERATED:", filePath);
-}
-
-// ===== GET APIs =====
+// ================= GET VIOLATIONS =================
 app.get('/api/violations', (req, res) => {
-    res.json(readDB());
+    try {
+        const data = JSON.parse(fs.readFileSync(DB_FILE));
+        res.json(data.reverse());
+    } catch {
+        res.json([]);
+    }
 });
 
-app.get('/api/score/:vehicleId', (req, res) => {
-    res.json({ score: getVehicleScore(req.params.vehicleId) });
+// ================= GET SCORE =================
+app.get('/api/score/:vehicle', (req, res) => {
+    try {
+        const scores = JSON.parse(fs.readFileSync(SCORE_FILE));
+        res.json({
+            vehicle: req.params.vehicle,
+            score: scores[req.params.vehicle] || 0
+        });
+    } catch {
+        res.json({ score: 0 });
+    }
 });
 
-// ===== START =====
+// ================= STATS =================
+app.get('/api/stats', (req, res) => {
+    try {
+        const violations = JSON.parse(fs.readFileSync(DB_FILE));
+        const scores = JSON.parse(fs.readFileSync(SCORE_FILE));
+
+        const total = violations.length;
+        const accidentCount = violations.filter(v => v.type === "ACCIDENT").length;
+
+        const totalScore = Object.values(scores).reduce((a, b) => a + b, 0);
+
+        res.json({
+            totalViolations: total,
+            totalScore,
+            accidents: accidentCount
+        });
+    } catch {
+        res.json({});
+    }
+});
+
+// ================= START =================
 app.listen(PORT, () => {
     console.log(`
 ==============================
-🚀 Server Running
-Port: ${PORT}
+🚀 SERVER RUNNING
+PORT: ${PORT}
 ==============================
 `);
 });
