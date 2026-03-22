@@ -30,14 +30,14 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// ===== DEMO GPS LOCATION (CHEMPERI) =====
+// ===== DEMO GPS LOCATION =====
 const DEMO_LOCATION = {
   name: "Chemperi, Kannur, Kerala",
   lat: 12.0676,
   lng: 75.5716
 };
 
-// ===== SCORE =====
+// ===== SCORE SYSTEM =====
 function getScore(type) {
   return {
     SEATBELT: 1,
@@ -50,20 +50,22 @@ function getScore(type) {
   }[type] || 0;
 }
 
-// ===== FINE =====
+// ===== FINAL FINE SYSTEM (YOUR RULES) =====
 function getFine(type) {
   return {
     SEATBELT: 500,
     DOOR: 500,
-    ALCOHOL: 2000,
+
     HARSH_BRAKING: 1000,
+    ALCOHOL: 1000,
+
     DROWSINESS: 2000,
     HARSH_DRIVING: 2000,
     OVERSPEED: 2000
   }[type] || 0;
 }
 
-// ===== UPLOAD =====
+// ===== UPLOAD API =====
 app.post('/upload', upload.single('image'), (req, res) => {
   try {
     const type = req.headers['type'] || req.body.type || "UNKNOWN";
@@ -76,7 +78,7 @@ app.post('/upload', upload.single('image'), (req, res) => {
       id: Date.now(),
       time: new Date(),
 
-      // ===== VEHICLE INFO =====
+      // ===== VEHICLE DETAILS =====
       vehicle: "KL59AB1234",
       owner: "Mark",
       mobile: "+918520649127",
@@ -87,7 +89,7 @@ app.post('/upload', upload.single('image'), (req, res) => {
       score: isEmergency ? 0 : getScore(type),
       fine: isEmergency ? 0 : getFine(type),
 
-      // ===== GPS LOCATION =====
+      // ===== LOCATION =====
       location: DEMO_LOCATION.name,
       lat: DEMO_LOCATION.lat,
       lng: DEMO_LOCATION.lng,
@@ -110,7 +112,7 @@ app.post('/upload', upload.single('image'), (req, res) => {
   }
 });
 
-// ===== GET =====
+// ===== GET ALL DATA =====
 app.get('/api/violations', (req, res) => {
   try {
     const data = JSON.parse(fs.readFileSync(DB));
@@ -128,7 +130,7 @@ app.post('/api/reset', (req, res) => {
 
 // ===== ROOT =====
 app.get('/', (req, res) => {
-  res.send("🚀 Server Running with GPS Location");
+  res.send("🚀 Vehicle Blackbox Server Running with Final Fine System");
 });
 
 // ===== START =====
