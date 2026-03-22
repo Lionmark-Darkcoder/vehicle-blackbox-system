@@ -19,25 +19,27 @@ app.use('/uploads', express.static(UPLOADS));
 
 // ROOT
 app.get('/', (req, res) => {
-  res.send("SERVER OK 🚀");
+  res.send("🚀 SERVER RUNNING");
 });
 
-// ✅ UPLOAD ROUTE (FIXED)
+// ✅ UPLOAD ROUTE
 app.post('/upload', (req, res) => {
-  console.log("📸 Upload request received");
+  console.log("📸 Upload received");
 
   const type = req.headers['type'] || "UNKNOWN";
+  const location = "Chemperi";
+  const lat = "12.0676";
+  const lng = "75.5716";
 
   const filename = Date.now() + ".jpg";
   const filepath = path.join(UPLOADS, filename);
 
-  let data = [];
+  let chunks = [];
 
-  req.on('data', chunk => data.push(chunk));
+  req.on('data', chunk => chunks.push(chunk));
 
   req.on('end', () => {
-    const buffer = Buffer.concat(data);
-
+    const buffer = Buffer.concat(chunks);
     fs.writeFileSync(filepath, buffer);
 
     let db = JSON.parse(fs.readFileSync(DB));
@@ -45,6 +47,9 @@ app.post('/upload', (req, res) => {
     db.push({
       id: Date.now(),
       type,
+      location,
+      lat,
+      lng,
       image: `/uploads/${filename}`,
       time: new Date().toISOString()
     });
@@ -63,4 +68,4 @@ app.get('/api/data', (req, res) => {
   res.json(db.reverse());
 });
 
-app.listen(PORT, () => console.log("🚀 Server running on", PORT));
+app.listen(PORT, () => console.log("🚀 Server running on port", PORT));
