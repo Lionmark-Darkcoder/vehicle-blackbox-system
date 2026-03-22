@@ -38,54 +38,100 @@ app.get('/', (req, res) => {
 });
 
 
-// 🔥 IMPORTANT FUNCTION
+// 🔥 SCORE SYSTEM (FIXED)
 function getScore(type) {
   const scores = {
     SEATBELT: 1,
     DOOR: 1,
     ALCOHOL: 3,
-    BRAKING: 3,
+    HARSH_BRAKING: 3,
     DROWSINESS: 5,
-    HARSH: 5,
+    HARSH_DRIVING: 5,
     OVERSPEED: 5
   };
   return scores[type] || 0;
 }
 
 
-// 🚀 UPLOAD API
-app.post('/upload', upload.single('image'), (req, res) => {
+// 🔥 GET TOTAL SCORE
+function getTotalScore(data) {
+  return data.reduce((sum, v) => sum + (v.score || 0), 0);
+}
+
+
+// 🚀 UPLOAD API (FULL FIX)
+app.post('/api/upload', upload.single('image'), (req, res) => {
   try {
     console.log("📥 Upload received");
 
-    const violationType =
+    const type =
       req.body.type ||
       req.body.violation ||
       req.body.event ||
       "UNKNOWN";
 
-    const record = {
-      timestamp: new Date().toISOString(),
-      violation_type: violationType,
-      vehicle: "KL59AB1234",
-      score: getScore(violationType),
-      filename: req.file ? req.file.filename : null,
-      path: req.file ? `/uploads/${req.file.filename}` : null
-    };
+    const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
 
     let data = [];
-
     try {
       data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     } catch {}
 
+    // 🚨 EMERGENCY EVENTS
+    if (type === "ACCIDENT" || type === "COLLISION") {
+      const emergency = {
+        timestamp: new Date().toISOString(),
+        violation_type: type,
+        emergency: true,
+        image: imagePath
+      };
+
+      data.push(emergency);
+      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+
+      console.log("🚨 EMERGENCY:", emergency);
+
+      return res.json({ status: "EMERGENCY" });
+    }
+
+    // NORMAL VIOLATION
+    const record = {
+      timestamp: new Date().toISOString(),
+      violation_type: type,
+      score: getScore(type),
+      image: imagePath
+    };
+
     data.push(record);
 
+    // SAVE
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 
-    console.log("✅ Saved:", record);
+    const totalScore = getTotalScore(data);
 
-    res.json({ success: true });
+    console.log("✅ Logged:", record);
+    console.log("📊 Total Score:", totalScore);
+
+    // 🚨 CHALLAN CONDITION
+    if (totalScore >= 5) {
+
+      const challan = {
+        totalScore,
+        fine: totalScore * 1000,
+        violations: data,
+        generatedAt: new Date().toISOString()
+      };
+
+      // RESET DB AFTER CHALLAN
+      fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
+
+      return res.json({
+        status: "CHALLAN",
+        challan
+      });
+    }
+
+    res.json({ status: "LOGGED" });
 
   } catch (err) {
     console.error(err);
@@ -94,7 +140,7 @@ app.post('/upload', upload.single('image'), (req, res) => {
 });
 
 
-// 🔥 THIS WAS MISSING ❗
+// 🔥 GET VIOLATIONS (FIXED)
 app.get('/api/violations', (req, res) => {
   try {
     const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
