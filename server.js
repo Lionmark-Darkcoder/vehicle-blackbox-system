@@ -7,28 +7,30 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// ===== PATHS =====
 const UPLOADS = path.join(__dirname, 'uploads');
 const DATA = path.join(__dirname, 'data');
 const DB = path.join(DATA, 'violations.json');
 
+// ===== INIT =====
 if (!fs.existsSync(UPLOADS)) fs.mkdirSync(UPLOADS);
 if (!fs.existsSync(DATA)) fs.mkdirSync(DATA);
 if (!fs.existsSync(DB)) fs.writeFileSync(DB, "[]");
 
+// ===== MIDDLEWARE =====
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(UPLOADS));
 
+// ===== MULTER =====
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOADS),
   filename: (req, file, cb) => cb(null, Date.now() + ".jpg")
 });
-
 const upload = multer({ storage });
 
-let challanLock = false;
-
-// SCORE
+// ===== SCORE SYSTEM =====
 function getScore(type) {
   return {
     SEATBELT: 1,
@@ -41,43 +43,76 @@ function getScore(type) {
   }[type] || 0;
 }
 
-// UPLOAD
+// ===== FINE SYSTEM (KERALA STYLE) =====
+function getFine(type) {
+  return {
+    SEATBELT: 500,
+    DOOR: 500,
+    ALCOHOL: 2000,
+    HARSH_BRAKING: 1000,
+    DROWSINESS: 2000,
+    HARSH_DRIVING: 2000,
+    OVERSPEED: 2000
+  }[type] || 0;
+}
+
+// ===== UPLOAD API =====
 app.post('/upload', upload.single('image'), (req, res) => {
+  try {
+    const type = req.headers['type'] || req.body.type || "UNKNOWN";
+    const location = req.headers['location'] || "Kochi";
 
-  const type =
-    req.headers['type'] ||
-    req.body.type ||
-    "UNKNOWN";
+    const isEmergency = ["ACCIDENT", "COLLISION"].includes(type);
 
-  const isEmergency = ["ACCIDENT", "COLLISION"].includes(type);
+    let data = JSON.parse(fs.readFileSync(DB));
 
-  let data = JSON.parse(fs.readFileSync(DB));
+    const record = {
+      id: Date.now(),
+      time: new Date(),
+      type,
+      location,
+      category: isEmergency ? "EVENT" : "VIOLATION",
+      score: isEmergency ? 0 : getScore(type),
+      fine: isEmergency ? 0 : getFine(type),
+      image: req.file ? `/uploads/${req.file.filename}` : null
+    };
 
-  const record = {
-    time: new Date(),
-    type,
-    category: isEmergency ? "EVENT" : "VIOLATION",
-    score: isEmergency ? 0 : getScore(type),
-    image: req.file ? `/uploads/${req.file.filename}` : null
-  };
+    data.push(record);
 
-  data.push(record);
-  fs.writeFileSync(DB, JSON.stringify(data, null, 2));
+    fs.writeFileSync(DB, JSON.stringify(data, null, 2));
 
-  res.json({ success: true });
+    console.log("✅ Saved:", record);
+
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Upload failed" });
+  }
 });
 
-// GET
+// ===== GET ALL =====
 app.get('/api/violations', (req, res) => {
-  const data = JSON.parse(fs.readFileSync(DB));
-  res.json(data);
+  try {
+    const data = JSON.parse(fs.readFileSync(DB));
+    res.json(data);
+  } catch {
+    res.json([]);
+  }
 });
 
-// RESET
+// ===== RESET =====
 app.post('/api/reset', (req, res) => {
   fs.writeFileSync(DB, "[]");
-  challanLock = false;
   res.json({ ok: true });
 });
 
-app.listen(PORT, () => console.log("🚀 Server running"));
+// ===== ROOT =====
+app.get('/', (req, res) => {
+  res.send("🚀 Vehicle Blackbox Server Running");
+});
+
+// ===== START =====
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
